@@ -1,6 +1,6 @@
 /* Remindate Web
  * Notities, mappen, agenda en tekenen. Alle data wordt lokaal in de browser
- * opgeslagen (localStorage), dus er is geen server of account nodig.
+ * opgeslagen (localStorage), dus er is geen server of account nodig. adawdawd
  */
 (() => {
     'use strict';
