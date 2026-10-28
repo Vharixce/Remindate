@@ -1,0 +1,174 @@
+﻿<!DOCTYPE html>
+<html lang="nl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#12121a">
+    <title>Remindate</title>
+    <link rel="icon" href="icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app" id="app">
+        <!-- Zijbalk -->
+        <aside class="sidebar" id="sidebar">
+            <div class="sidebar-header">
+                <div class="sidebar-title">Remindate</div>
+                <div class="sidebar-actions">
+                    <button class="icon-btn" id="toggleSidebarSide" title="Zijbalk links/rechts">⇄</button>
+                    <button class="icon-btn" id="collapseSidebar" title="Zijbalk inklappen">«</button>
+                </div>
+            </div>
+
+            <div class="sidebar-section">
+                <div class="sidebar-section-header">
+                    <div>Verkenner</div>
+                    <div class="sidebar-section-actions">
+                        <button class="ghost-btn" id="newNoteBtn">+ Notitie</button>
+                        <button class="ghost-btn" id="newFolderBtn">+ Map</button>
+                    </div>
+                </div>
+                <div class="tree" id="tree"></div>
+                <div class="empty-explorer" id="emptyExplorer" style="display:none;">
+                    <div class="empty-title">Nog geen notities</div>
+                    <div class="empty-sub">Klik op “+ Notitie” om te beginnen.</div>
+                </div>
+            </div>
+
+            <div class="sidebar-footer">
+                <button class="footer-btn" id="exportBtn" title="Download een back-up van al je notities">↓ Back-up</button>
+                <button class="footer-btn" id="importBtn" title="Back-up terugzetten">↑ Terugzetten</button>
+                <input type="file" id="importFile" accept="application/json,.json" hidden>
+            </div>
+        </aside>
+
+        <div class="sidebar-splitter" id="sidebarSplitter" title="Sleep om de zijbalk te verbreden"></div>
+        <button class="expand-sidebar" id="expandSidebar" title="Zijbalk uitklappen">»</button>
+
+        <!-- Hoofdvenster -->
+        <main class="main">
+            <div class="topbar">
+                <div class="tabs">
+                    <button class="tab active" id="tabNote">Notitie</button>
+                    <button class="tab" id="tabCalendar">Agenda</button>
+                </div>
+                <button class="icon-btn" id="toggleSidebarMain" title="Zijbalk links/rechts">⇄</button>
+            </div>
+
+            <div class="content">
+                <!-- Notitie-editor -->
+                <section class="view" id="viewNote">
+                    <div class="editor-header">
+                        <input type="text" id="noteTitle" class="title-input" placeholder="Titel" autocomplete="off">
+                        <div class="editor-actions">
+                            <button class="btn" id="saveNoteBtn">Opslaan</button>
+                            <button class="btn btn-danger" id="deleteNoteBtn">Verwijderen</button>
+                        </div>
+                    </div>
+
+                    <div class="editor-toolbar">
+                        <div class="mode-toggle">
+                            <button class="toggle-btn active" id="modeText">Tekst</button>
+                            <button class="toggle-btn" id="modeDraw">Tekenen</button>
+                        </div>
+                        <select id="noteFolder" class="folder-select" title="Map van deze notitie"></select>
+                    </div>
+
+                    <div class="card schedule-card">
+                        <div class="card-header" id="scheduleHeader">
+                            <div>Gepland</div>
+                            <div class="card-header-actions">
+                                <button class="icon-btn" id="unscheduleBtn" title="Planning wissen">×</button>
+                                <span class="chevron" id="scheduleChevron">▸</span>
+                            </div>
+                        </div>
+                        <div class="schedule-body" id="scheduleBody">
+                            <div class="schedule-row">
+                                <input type="date" id="scheduleDate" aria-label="Datum">
+                                <input type="time" id="scheduleTime" step="1" aria-label="Tijd">
+                            </div>
+                            <label class="check-row"><input type="checkbox" id="alarmEnabled"> Alarm</label>
+                            <div class="step-row">
+                                <span>Herhalen</span>
+                                <input type="range" id="repeatCount" min="0" max="10" value="0">
+                                <span class="step-value" id="repeatCountLabel">0</span>
+                            </div>
+                            <div class="step-row">
+                                <span>Snooze (min)</span>
+                                <input type="range" id="snoozeMinutes" min="1" max="60" value="5">
+                                <span class="step-value" id="snoozeMinutesLabel">5</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="card draw-toolbar" id="drawToolbar" style="display:none;">
+                        <div class="draw-tools">
+                            <button class="swatch" id="colorSwatch" title="Tekstkleur"></button>
+                            <input type="range" id="brushSize" min="1" max="40" value="6" title="Dikte">
+                            <span class="step-value" id="brushSizeLabel">6</span>
+                            <button class="tool-btn active" id="toolPen" title="Pen">✎</button>
+                            <button class="tool-btn" id="toolEraser" title="Gum">⌫</button>
+                            <button class="tool-btn" id="toolFill" title="Canvas vullen">▦</button>
+                            <button class="tool-btn" id="toolUndo" title="Ongedaan maken">↶</button>
+                            <button class="tool-btn" id="toolClear" title="Alles wissen">✕</button>
+                            <button class="tool-btn" id="toolCanvasBg" title="Canvasachtergrond">◧</button>
+                        </div>
+                    </div>
+
+                    <div class="editor-body">
+                        <textarea id="noteContent" class="text-editor" placeholder="Schrijf je notitie hier..."></textarea>
+                        <div class="draw-container" id="drawContainer" style="display:none;">
+                            <canvas id="drawCanvas" width="800" height="600"></canvas>
+                        </div>
+                    </div>
+                </section>
+
+                <!-- Agenda -->
+                <section class="view" id="viewCalendar" style="display:none;">
+                    <div class="calendar-header">
+                        <button class="icon-btn" id="calPrev" title="Vorige maand">‹</button>
+                        <div class="calendar-month" id="calendarMonth"></div>
+                        <button class="icon-btn" id="calNext" title="Volgende maand">›</button>
+                    </div>
+                    <div class="calendar-weekdays" id="calendarWeekdays"></div>
+                    <div class="calendar-grid" id="calendarGrid"></div>
+                    <div class="calendar-day-notes" id="calendarDayNotes"></div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- Kleurenkiezer -->
+    <div class="modal" id="colorModal">
+        <div class="modal-backdrop" id="colorBackdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>Kies een kleur</div>
+                <button class="icon-btn" id="colorClose" title="Sluiten">×</button>
+            </div>
+            <div class="palette" id="palette"></div>
+            <input type="color" id="colorCustom" value="#222222" aria-label="Eigen kleur">
+        </div>
+    </div>
+
+    <!-- Canvasachtergrond -->
+    <div class="modal" id="canvasBgModal">
+        <div class="modal-backdrop" id="canvasBgBackdrop"></div>
+        <div class="modal-content">
+            <div class="modal-header">
+                <div>Canvasachtergrond</div>
+                <button class="icon-btn" id="canvasBgClose" title="Sluiten">×</button>
+            </div>
+            <div class="palette" id="canvasPalette"></div>
+            <input type="color" id="canvasBgCustom" value="#ffffff" aria-label="Eigen achtergrondkleur">
+        </div>
+    </div>
+
+    <div id="toastHost"></div>
+
+    <script>window.__errs=[];window.addEventListener("error",function(e){window.__errs.push(e.message)});window.addEventListener("DOMContentLoaded",function(){setTimeout(function(){var d=document.createElement("div");d.id="smoke-result";d.textContent="SMOKE:"+(window.__errs.length?window.__errs.join(" | "):"OK")+";tree="+document.getElementById("tree").children.length+";toast="+(document.getElementById("toastHost")?1:0);document.body.appendChild(d)},300)});</script><script src="app.js"></script>
+</body>
+</html>
