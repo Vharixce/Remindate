@@ -11,6 +11,8 @@
         prefs: 'remindate.prefs.v1',
         alarms: 'remindate.alarms.v1',
         fileHandle: 'remindate.fileHandle.v1',
+        deleted: 'remindate.deleted.v1',
+        updatedAt: 'remindate.updatedAt.v1',
         github: 'remindate.github.v1'
     };
 
@@ -43,6 +45,11 @@
             mode: 'text'
         },
         alarms: {},
+        // Deleted note/folder ids with the time they were deleted, so a sync
+        // knows an item was removed instead of "missing on this device".
+        deleted: { notes: {}, folders: {} },
+        // Time of the last local change (ISO); compared with GitHub's version.
+        updatedAt: null,
         currentNoteId: null,
         currentFolderId: null,
         calendarCursor: new Date(),
@@ -91,8 +98,24 @@
         if (!Array.isArray(state.folders)) state.folders = [];
         if (!Array.isArray(state.prefs.expandedFolders)) state.prefs.expandedFolders = [];
         if (!state.alarms || typeof state.alarms !== 'object') state.alarms = {};
+        state.deleted = normalizeDeleted(readJSON(STORAGE.deleted, null));
+        state.updatedAt = readJSON(STORAGE.updatedAt, null);
 
         state.notes.forEach(migrateNote);
+        state.folders.forEach(migrateFolder);
+    }
+
+    function normalizeDeleted(d) {
+        return {
+            notes: (d && typeof d.notes === 'object' && d.notes) || {},
+            folders: (d && typeof d.folders === 'object' && d.folders) || {}
+        };
+    }
+
+    function migrateFolder(folder) {
+        folder.id = folder.id || uid();
+        folder.name = folder.name || 'Folder';
+        folder.modifiedAt = folder.modifiedAt || '2000-01-01T00:00:00.000Z';
     }
 
     function migrateNote(note) {
@@ -112,13 +135,22 @@
         note.strokes = Array.isArray(note.strokes) ? note.strokes : [];
     }
 
+    // Every local change records "now" as the time of the latest local version
+    function markChanged() {
+        state.updatedAt = new Date().toISOString();
+        writeJSON(STORAGE.updatedAt, state.updatedAt);
+        writeJSON(STORAGE.deleted, state.deleted);
+        if (typeof updateGithubStatus === 'function' && !githubBusy) updateGithubStatus();
+    }
     const saveNotes = () => {
         writeJSON(STORAGE.notes, state.notes);
+        markChanged();
         scheduleFileSave();
         scheduleGithubSave();
     };
     const saveFolders = () => {
         writeJSON(STORAGE.folders, state.folders);
+        markChanged();
         scheduleFileSave();
         scheduleGithubSave();
     };
@@ -287,6 +319,10 @@
                 : ` · ${formatDateTime(note.scheduledAt)}`;
         }
         return `<div class="note-item ${note.id === state.currentNoteId ? 'active' : ''}" data-note-id="${note.id}">
+            <span class="item-actions">
+                <button class="folder-action-btn note-rename" data-note-id="${note.id}" title="Rename note">Rename</button>
+                <button class="folder-action-btn folder-delete note-delete" data-note-id="${note.id}" title="Delete note">Delete</button>
+            </span>
             <div class="note-item-title">${escapeHtml(note.title.trim() || 'Untitled')}</div>
             <div class="note-item-meta">${escapeHtml(preview)}${meta}</div>
         </div>`;
@@ -375,8 +411,12 @@
         const siblings = sortedNotes(state.notes.filter((n) => (n.folderId || null) === folderId && n.id !== note.id));
         const index = siblings.indexOf(target) + (after ? 1 : 0);
         siblings.splice(index, 0, note);
-        siblings.forEach((n, i) => { n.order = i; });
+        const now = new Date().toISOString();
+        siblings.forEach((n, i) => {
+            if (n.order !== i) { n.order = i; n.modifiedAt = now; }
+        });
         note.folderId = folderId;
+        note.modifiedAt = now;
         if (note.id === state.currentNoteId) state.currentFolderId = folderId;
         saveNotes();
         renderTree();
@@ -384,6 +424,18 @@
     }
 
     treeEl.addEventListener('click', (e) => {
+        const noteRename = e.target.closest('.note-rename');
+        if (noteRename) {
+            e.stopPropagation();
+            renameNote(noteRename.dataset.noteId);
+            return;
+        }
+        const noteDelete = e.target.closest('.note-delete');
+        if (noteDelete) {
+            e.stopPropagation();
+            deleteNote(noteDelete.dataset.noteId);
+            return;
+        }
         const noteEl = e.target.closest('.note-item');
         if (noteEl) {
             selectNote(noteEl.dataset.noteId);
@@ -412,6 +464,16 @@
             savePrefs();
             renderTree();
         }
+    });
+
+    // Double-click a note or folder name to rename it
+    treeEl.addEventListener('dblclick', (e) => {
+        if (e.target.closest('button')) return;
+        const title = e.target.closest('.note-item-title');
+        if (title) { renameNote(title.closest('.note-item').dataset.noteId); return; }
+        const name = e.target.closest('.folder-name');
+        const header = name && name.closest('.folder-header');
+        if (header && header.dataset.folderId !== '__none') renameFolder(header.dataset.folderId);
     });
 
     treeEl.addEventListener('dragover', (e) => {
@@ -506,17 +568,38 @@
         if (isMobile()) app.classList.remove('mobile-open');
     }
 
-    function deleteNote() {
-        const note = noteById(state.currentNoteId);
+    async function deleteNote(id = state.currentNoteId) {
+        flushEditor();
+        const note = noteById(id);
         if (!note) return;
-        if (!confirm(`Note "${note.title.trim() || 'Untitled'}" delete?`)) return;
+        const ok = await askConfirm('Delete note', `Delete "${note.title.trim() || 'Untitled'}"? This cannot be undone.`, 'Delete');
+        if (!ok || !noteById(id)) return;
         state.notes = state.notes.filter((n) => n.id !== note.id);
+        state.deleted.notes[note.id] = new Date().toISOString();
         delete state.alarms[note.id];
         saveNotes();
         saveAlarms();
-        state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
+        if (state.currentNoteId === note.id) {
+            state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
+            state.currentFolderId = noteById(state.currentNoteId)?.folderId || null;
+            renderEditor();
+        }
         renderTree();
-        renderEditor();
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
+        toast('Note deleted');
+    }
+
+    async function renameNote(id) {
+        flushEditor();
+        const note = noteById(id);
+        if (!note) return;
+        const name = await askText('Rename note', note.title, 'Rename');
+        if (name === null || !noteById(id)) return;
+        note.title = name.trim();
+        touch(note);
+        if (note.id === state.currentNoteId) $('noteTitle').value = note.title;
+        renderTree();
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
     }
 
     function folderOptions(selected) {
@@ -612,17 +695,17 @@
         toast('Note saved');
     });
 
-    $('deleteNoteBtn').addEventListener('click', deleteNote);
+    $('deleteNoteBtn').addEventListener('click', () => deleteNote());
 
 
     $('newNoteBtn').addEventListener('click', newNote);
 
     /* ---------------- folders ---------------- */
 
-    $('newFolderBtn').addEventListener('click', () => {
-        const name = prompt('New folder name:', 'New folder');
+    $('newFolderBtn').addEventListener('click', async () => {
+        const name = await askText('New folder', 'New folder', 'Create');
         if (!name || !name.trim()) return;
-        const folder = { id: uid(), name: name.trim() };
+        const folder = { id: uid(), name: name.trim(), modifiedAt: new Date().toISOString() };
         state.folders.push(folder);
         state.prefs.expandedFolders.push(folder.id);
         saveFolders();
@@ -631,12 +714,13 @@
         if (state.currentNoteId) $('noteFolder').innerHTML = folderOptions(noteById(state.currentNoteId)?.folderId);
     });
 
-    function renameFolder(id) {
+    async function renameFolder(id) {
         const folder = state.folders.find((f) => f.id === id);
         if (!folder) return;
-        const name = prompt('New name:', folder.name);
-        if (!name || !name.trim()) return;
+        const name = await askText('Rename folder', folder.name, 'Rename');
+        if (!name || !name.trim() || !state.folders.includes(folder)) return;
         folder.name = name.trim();
+        folder.modifiedAt = new Date().toISOString();
         saveFolders();
         renderTree();
         if (noteById(state.currentNoteId)?.folderId === id) {
@@ -644,12 +728,16 @@
         }
     }
 
-    function deleteFolder(id) {
+    async function deleteFolder(id) {
+        flushEditor();
         const folder = state.folders.find((f) => f.id === id);
         if (!folder) return;
-        if (!confirm(`Delete folder "${folder.name}"? Notes will be moved to "No folder".`)) return;
+        const ok = await askConfirm('Delete folder', `Delete folder "${folder.name}"? The notes in it are kept and moved to "No folder".`, 'Delete');
+        if (!ok || !state.folders.includes(folder)) return;
+        const now = new Date().toISOString();
         state.folders = state.folders.filter((f) => f.id !== id);
-        state.notes.forEach((n) => { if (n.folderId === id) n.folderId = null; });
+        state.deleted.folders[id] = now;
+        state.notes.forEach((n) => { if (n.folderId === id) { n.folderId = null; n.modifiedAt = now; } });
         state.prefs.expandedFolders = state.prefs.expandedFolders.filter((f) => f !== id);
         if (state.currentFolderId === id) state.currentFolderId = null;
         saveFolders();
@@ -835,6 +923,10 @@
         const label = `${day.getDate()} ${MONTHS[day.getMonth()]} ${day.getFullYear()}`;
         host.innerHTML = `<div class="calendar-day-title">${label}</div>` + (notes.length
             ? notes.map((n) => `<div class="calendar-note-item" draggable="true" data-note-id="${n.id}" title="Click to open – drag to another day">
+                    <span class="item-actions">
+                        <button class="folder-action-btn note-rename" data-note-id="${n.id}" title="Rename note">Rename</button>
+                        <button class="folder-action-btn folder-delete note-delete" data-note-id="${n.id}" title="Delete note">Delete</button>
+                    </span>
                     <div>${escapeHtml(n.title.trim() || 'Untitled')}</div>
                     <div class="calendar-note-time">${formatTime(n.scheduledAt)}${n.alarmEnabled ? ' · alarm' : ''}${isRecurring(n) ? ' · ' + repeatSummary(n) : ''}</div>
                 </div>`).join('')
@@ -933,6 +1025,10 @@
     });
 
     $('calendarDayNotes').addEventListener('click', (e) => {
+        const rename = e.target.closest('.note-rename');
+        if (rename) { renameNote(rename.dataset.noteId); return; }
+        const del = e.target.closest('.note-delete');
+        if (del) { deleteNote(del.dataset.noteId); return; }
         const item = e.target.closest('.calendar-note-item');
         if (!item) return;
         setTab('note');
@@ -1192,9 +1288,9 @@
         flushEditor();
     });
 
-    $('toolClear').addEventListener('click', () => {
+    $('toolClear').addEventListener('click', async () => {
         if (!state.draw.strokes.length) return;
-        if (!confirm('Clear the entire drawing?')) return;
+        if (!(await askConfirm('Clear drawing', 'Clear the entire drawing?', 'Clear'))) return;
         state.draw.strokes = [];
         renderStrokes();
         flushEditor();
@@ -1247,8 +1343,55 @@
     }
 
     function closeModals() {
+        if (dialogResolve) { finishDialog(false); return; }
         document.querySelectorAll('.modal.active').forEach((m) => m.classList.remove('active'));
     }
+
+    /* In-app dialogs. Browser prompt()/confirm() can be silently blocked
+     * (e.g. after ticking "prevent this page from creating dialogs"). */
+    let dialogResolve = null;
+
+    function askDialog({ title, message = '', input = null, okLabel = 'OK', danger = false }) {
+        return new Promise((resolve) => {
+            if (dialogResolve) finishDialog(false);
+            dialogResolve = resolve;
+            $('dialogTitle').textContent = title;
+            $('dialogMessage').textContent = message;
+            $('dialogMessage').hidden = !message;
+            const field = $('dialogInput');
+            field.hidden = input === null;
+            field.value = input === null ? '' : input;
+            const ok = $('dialogOk');
+            ok.textContent = okLabel;
+            ok.classList.toggle('btn-danger', danger);
+            ok.classList.toggle('btn-primary', !danger);
+            $('dialogModal').classList.add('active');
+            setTimeout(() => {
+                if (input !== null) { field.focus(); field.select(); } else ok.focus();
+            }, 30);
+        });
+    }
+
+    function finishDialog(ok) {
+        if (!dialogResolve) return;
+        const resolve = dialogResolve;
+        dialogResolve = null;
+        $('dialogModal').classList.remove('active');
+        if ($('dialogInput').hidden) resolve(!!ok);
+        else resolve(ok ? $('dialogInput').value : null);
+    }
+
+    const askText = (title, value, okLabel = 'OK') => askDialog({ title, input: value || '', okLabel });
+    const askConfirm = (title, message, okLabel = 'OK') =>
+        askDialog({ title, message, okLabel, danger: /delete|clear|replace/i.test(okLabel) });
+
+    $('dialogOk').addEventListener('click', () => finishDialog(true));
+    $('dialogCancel').addEventListener('click', () => finishDialog(false));
+    $('dialogClose').addEventListener('click', () => finishDialog(false));
+    $('dialogBackdrop').addEventListener('click', () => finishDialog(false));
+    $('dialogInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); finishDialog(true); }
+    });
 
     buildPalette($('palette'), (color) => {
         state.draw.color = color;
@@ -1385,14 +1528,24 @@
     let githubBusy = false;
 
     const githubConfigured = () => !!(githubConfig.owner && githubConfig.repo && githubConfig.path && githubConfig.token);
-    const githubData = () => JSON.stringify({ folders: state.folders, notes: state.notes });
+    let githubPending = false;
+
+    function shortTime(iso) {
+        const d = parseDate(iso);
+        if (!d) return '–';
+        return sameDay(d, new Date()) ? formatTime(toLocalIso(d)) : formatDateTime(toLocalIso(d));
+    }
 
     function updateGithubStatus(message) {
         const el = $('githubStatus');
         if (!el) return;
-        el.textContent = message || (githubConfigured()
-            ? `GitHub: ${githubConfig.owner}/${githubConfig.repo}/${githubConfig.path}`
-            : 'GitHub: not configured');
+        if (message) { el.textContent = message; return; }
+        if (!githubConfigured()) { el.textContent = 'GitHub: not configured'; el.title = ''; return; }
+        const where = `${githubConfig.owner}/${githubConfig.repo}/${githubConfig.path}`;
+        el.textContent = githubConfig.lastSyncAt
+            ? `GitHub: synced ${shortTime(githubConfig.lastSyncAt)} • last change ${shortTime(laterIso(state.updatedAt, githubConfig.remoteUpdatedAt))}`
+            : `GitHub: ${where} • not synced yet`;
+        el.title = `${where}\nLast sync: ${shortTime(githubConfig.lastSyncAt)}\nLast change on this device: ${shortTime(state.updatedAt)}\nLatest version on GitHub: ${shortTime(githubConfig.remoteUpdatedAt)}`;
     }
 
     function showGithubSettings() {
@@ -1412,7 +1565,8 @@
             token: $('ghToken').value.trim(),
             autoSync: $('ghAutoSync').checked,
             sha: githubConfig.sha || null,
-            baseline: githubConfig.baseline || null
+            lastSyncAt: githubConfig.lastSyncAt || null,
+            remoteUpdatedAt: githubConfig.remoteUpdatedAt || null
         };
     }
 
@@ -1420,11 +1574,13 @@
         return `https://api.github.com/repos/${encodeURIComponent(githubConfig.owner)}/${encodeURIComponent(githubConfig.repo)}/contents/${githubConfig.path.split('/').map(encodeURIComponent).join('/')}`;
     }
 
-    async function githubRequest(method, body, url = githubUrl()) {
+    async function githubRequest(method, body, url = githubUrl(), accept = 'application/vnd.github+json') {
         const response = await fetch(url, {
             method,
+            // never use a cached copy: we must always see the newest version on GitHub
+            cache: 'no-store',
             headers: {
-                Accept: 'application/vnd.github+json',
+                Accept: accept,
                 Authorization: `Bearer ${githubConfig.token}`,
                 'X-GitHub-Api-Version': '2022-11-28',
                 ...(body ? { 'Content-Type': 'application/json' } : {})
@@ -1433,11 +1589,12 @@
         });
         if (!response.ok && response.status !== 404) {
             const data = await response.json().catch(() => ({}));
-            const error = new Error(data.message || `GitHub gaf fout ${response.status}`);
+            const error = new Error(data.message || `GitHub error ${response.status}`);
             error.status = response.status;
             throw error;
         }
-        return response.status === 404 ? null : response.json();
+        if (response.status === 404) return null;
+        return accept.includes('raw') ? response.text() : response.json();
     }
 
     function decodeGithubFile(encoded) {
@@ -1448,116 +1605,228 @@
     function encodeGithubFile(value) {
         const bytes = new TextEncoder().encode(value);
         let binary = '';
-        bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+        for (let i = 0; i < bytes.length; i += 0x8000) {
+            binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        }
         return btoa(binary);
     }
 
-    async function writeGithubData(sha) {
-        const content = JSON.stringify(buildNotesPayload(), null, 2);
+    /* ---- snapshots & merging ----
+     * A snapshot is { notes, folders, deleted, updatedAt }.
+     * Merging works per note/folder: the version with the newest modifiedAt wins,
+     * and an item deleted after its last change stays deleted.
+     */
+
+    // JSON with sorted keys, so the same data always gives the same text
+    function stableStringify(value) {
+        if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
+        if (value && typeof value === 'object') {
+            return '{' + Object.keys(value).sort().filter((k) => value[k] !== undefined)
+                .map((k) => JSON.stringify(k) + ':' + stableStringify(value[k])).join(',') + '}';
+        }
+        return JSON.stringify(value === undefined ? null : value);
+    }
+
+    const snapshotKey = (snap) => stableStringify({ notes: snap.notes, folders: snap.folders, deleted: snap.deleted });
+
+    function localSnapshot() {
+        return JSON.parse(JSON.stringify({
+            notes: state.notes,
+            folders: state.folders,
+            deleted: state.deleted,
+            updatedAt: state.updatedAt
+        }));
+    }
+
+    function normalizeSnapshot(data) {
+        const notes = Array.isArray(data) ? data : data.notes;
+        if (!Array.isArray(notes)) throw new Error('notes.json on GitHub does not contain a valid note list');
+        const snap = {
+            notes: notes.map((n) => { migrateNote(n); return n; }),
+            folders: (Array.isArray(data) ? [] : (data.folders || [])).map((f) => { migrateFolder(f); return f; }),
+            deleted: normalizeDeleted(Array.isArray(data) ? null : data.deleted),
+            updatedAt: Array.isArray(data) ? null : (data.updatedAt || null)
+        };
+        return snap;
+    }
+
+    const timeOf = (iso) => Date.parse(iso) || 0;
+    const laterIso = (a, b) => (timeOf(a) >= timeOf(b) ? a : b) || a || b || null;
+
+    function mergeSnapshots(local, remote) {
+        const deleted = { notes: {}, folders: {} };
+        const cutoff = Date.now() - 180 * 86400000; // forget deletions after ~6 months
+        ['notes', 'folders'].forEach((kind) => {
+            [remote.deleted[kind], local.deleted[kind]].forEach((list) => {
+                Object.entries(list).forEach(([id, at]) => {
+                    if (timeOf(at) < cutoff) return;
+                    if (!deleted[kind][id] || timeOf(at) > timeOf(deleted[kind][id])) deleted[kind][id] = at;
+                });
+            });
+        });
+
+        const mergeList = (kind, mine, theirs) => {
+            const map = new Map();
+            const order = [];
+            [...mine, ...theirs].forEach((item) => {
+                const current = map.get(item.id);
+                if (!current) { map.set(item.id, item); order.push(item.id); }
+                else if (timeOf(item.modifiedAt) > timeOf(current.modifiedAt)) map.set(item.id, item);
+            });
+            return order.map((id) => map.get(id)).filter((item) => {
+                const gone = deleted[kind][item.id];
+                if (!gone) return true;
+                if (timeOf(gone) >= timeOf(item.modifiedAt)) return false;
+                delete deleted[kind][item.id]; // changed again after the delete: keep it
+                return true;
+            });
+        };
+
+        const folders = mergeList('folders', local.folders, remote.folders);
+        const folderIds = new Set(folders.map((f) => f.id));
+        const notes = mergeList('notes', local.notes, remote.notes)
+            .map((n) => (n.folderId && !folderIds.has(n.folderId) ? { ...n, folderId: null } : n));
+
+        return { notes, folders, deleted, updatedAt: laterIso(local.updatedAt, remote.updatedAt) };
+    }
+
+    // Put a merged snapshot into the app without counting it as a new local change
+    function applySnapshot(snap) {
+        const before = stableStringify(noteById(state.currentNoteId) || null);
+        const knownFolders = new Set(state.folders.map((f) => f.id));
+        state.notes = snap.notes.map((n) => { migrateNote(n); return n; });
+        state.folders = snap.folders;
+        state.deleted = snap.deleted;
+        state.updatedAt = snap.updatedAt;
+        writeJSON(STORAGE.notes, state.notes);
+        writeJSON(STORAGE.folders, state.folders);
+        writeJSON(STORAGE.deleted, state.deleted);
+        writeJSON(STORAGE.updatedAt, state.updatedAt);
+        scheduleFileSave();
+
+        state.folders.forEach((f) => {
+            // folders that are new on this device start expanded
+            if (!knownFolders.has(f.id) && !state.prefs.expandedFolders.includes(f.id)) state.prefs.expandedFolders.push(f.id);
+        });
+        savePrefs();
+        if (!noteById(state.currentNoteId)) {
+            state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
+            state.currentFolderId = noteById(state.currentNoteId)?.folderId || null;
+        }
+        renderTree();
+        if (stableStringify(noteById(state.currentNoteId) || null) !== before) renderEditor();
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
+    }
+
+    async function fetchRemote() {
+        const meta = await githubRequest('GET');
+        if (!meta) return null;
+        let text;
+        if (meta.content && meta.encoding === 'base64') text = decodeGithubFile(meta.content);
+        else text = await githubRequest('GET', null, githubUrl(), 'application/vnd.github.raw+json'); // files > 1 MB
+        return { sha: meta.sha, data: text && text.trim() ? JSON.parse(text) : [] };
+    }
+
+    async function pushRemote(snap, sha) {
+        const payload = {
+            app: 'Remindate',
+            version: 1,
+            updatedAt: snap.updatedAt || new Date().toISOString(),
+            folders: snap.folders,
+            notes: snap.notes,
+            deleted: snap.deleted
+        };
         const result = await githubRequest('PUT', {
-            message: 'Remindate sync',
-            content: encodeGithubFile(content),
+            message: `Remindate sync ${new Date().toISOString()}`,
+            content: encodeGithubFile(JSON.stringify(payload, null, 2)),
             ...(sha ? { sha } : {})
         });
         githubConfig.sha = result.content.sha;
-        githubConfig.baseline = githubData();
-        writeJSON(STORAGE.github, githubConfig);
-        updateGithubStatus('GitHub: synced');
+        githubConfig.remoteUpdatedAt = payload.updatedAt;
     }
 
-    function useRemoteData(data) {
-        applyNotesPayload(data);
-        githubConfig.baseline = githubData();
-        renderTree();
-        renderEditor();
-    }
-
+    // Sync = 1) fetch the newest version from GitHub, 2) merge it with this
+    // device, 3) push the result back (only if GitHub doesn't have it yet).
     async function syncGithub(options = {}) {
-        if (!githubConfigured() || githubBusy) return;
+        if (!githubConfigured()) return;
+        if (githubBusy) { githubPending = true; return; }
         githubBusy = true;
-        updateGithubStatus('GitHub: syncing…');
+        let pulled = false, pushed = false;
         try {
             if (options.flush !== false) flushEditor();
-            let remote = await githubRequest('GET');
-            const local = githubData();
+            for (let attempt = 0; attempt < 4; attempt++) {
+                updateGithubStatus('GitHub: fetching…');
+                const local = localSnapshot();
+                const remote = await fetchRemote();
+                // You edited something while we were fetching: start over with the new data
+                if (state.updatedAt !== local.updatedAt) continue;
 
-            if (!remote) {
-                await writeGithubData(null);
-                toast('Notes uploaded to GitHub');
+                let merged = local;
+                let remoteSnap = null;
+                if (remote) {
+                    remoteSnap = normalizeSnapshot(remote.data);
+                    merged = mergeSnapshots(local, remoteSnap);
+                    githubConfig.remoteUpdatedAt = remoteSnap.updatedAt;
+                }
+                if (snapshotKey(merged) !== snapshotKey(local)) {
+                    applySnapshot(merged);
+                    pulled = true;
+                }
+                if (!remote || snapshotKey(merged) !== snapshotKey(remoteSnap)) {
+                    updateGithubStatus('GitHub: pushing…');
+                    try {
+                        await pushRemote(merged, remote && remote.sha);
+                        pushed = true;
+                    } catch (err) {
+                        // Someone else pushed in between (409/422): fetch again and retry
+                        if (err.status === 409 || err.status === 422) continue;
+                        throw err;
+                    }
+                } else {
+                    githubConfig.sha = remote.sha;
+                }
+                githubConfig.lastSyncAt = new Date().toISOString();
+                writeJSON(STORAGE.github, githubConfig);
+                updateGithubStatus();
+                if (!options.silent) {
+                    toast(pulled && pushed ? 'Fetched changes from GitHub and pushed yours'
+                        : pulled ? 'Fetched the latest changes from GitHub'
+                            : pushed ? 'Pushed your changes to GitHub'
+                                : 'Already up to date with GitHub');
+                }
                 return;
             }
-
-            const remoteText = decodeGithubFile(remote.content);
-            const remoteData = JSON.parse(remoteText);
-            const remoteNotes = Array.isArray(remoteData) ? remoteData : remoteData.notes;
-            if (!Array.isArray(remoteNotes)) throw new Error('notes.json does not contain a valid note list');
-            const remoteComparable = JSON.stringify({ folders: Array.isArray(remoteData) ? [] : (remoteData.folders || []), notes: remoteNotes });
-
-            if (!githubConfig.sha) {
-                if (remoteComparable === local) {
-                    githubConfig.sha = remote.sha;
-                    githubConfig.baseline = local;
-                    writeJSON(STORAGE.github, githubConfig);
-                } else if (!state.notes.length && !state.folders.length) {
-                    useRemoteData(remoteData);
-                    githubConfig.sha = remote.sha;
-                    writeJSON(STORAGE.github, githubConfig);
-                } else if (confirm('GitHub already contains notes. OK uploads and replaces them with this browser version. Cancel loads the GitHub version on this device.')) {
-                    await writeGithubData(remote.sha);
-                    toast('Local notes uploaded to GitHub');
-                    return;
-                } else {
-                    useRemoteData(remoteData);
-                    githubConfig.sha = remote.sha;
-                    writeJSON(STORAGE.github, githubConfig);
-                    toast('Notes loaded from GitHub');
-                    return;
-                }
-            } else if (remote.sha === githubConfig.sha) {
-                if (local !== (githubConfig.baseline || '')) await writeGithubData(remote.sha);
-            } else {
-                const base = githubConfig.baseline || '';
-                const localChanged = local !== base;
-                const remoteChanged = remoteComparable !== base;
-                if (local === remoteComparable) {
-                    githubConfig.sha = remote.sha;
-                    githubConfig.baseline = local;
-                    writeJSON(STORAGE.github, githubConfig);
-                } else if (localChanged && remoteChanged) {
-                    const keepLocal = confirm('Sync conflict: both this browser and GitHub changed. OK keeps this browser version. Cancel loads the GitHub version.');
-                    if (keepLocal) await writeGithubData(remote.sha);
-                    else {
-                        useRemoteData(remoteData);
-                        githubConfig.sha = remote.sha;
-                        writeJSON(STORAGE.github, githubConfig);
-                    }
-                    toast('Sync conflict resolved');
-                    return;
-                } else if (localChanged) {
-                    await writeGithubData(remote.sha);
-                } else {
-                    useRemoteData(remoteData);
-                    githubConfig.sha = remote.sha;
-                    githubConfig.baseline = githubData();
-                    writeJSON(STORAGE.github, githubConfig);
-                }
-            }
-            updateGithubStatus('GitHub: synced');
-            if (!options.silent) toast('GitHub sync complete');
+            throw new Error('the data kept changing during sync, please try again');
         } catch (err) {
             console.error('GitHub sync failed', err);
             updateGithubStatus('GitHub: sync failed');
             toast(`GitHub sync failed: ${err.message}`);
         } finally {
             githubBusy = false;
+            if (githubPending) {
+                githubPending = false;
+                syncGithub({ silent: true, flush: false });
+            }
         }
     }
 
     function scheduleGithubSave() {
         if (!githubConfig.autoSync || !githubConfigured()) return;
         clearTimeout(githubTimer);
-        githubTimer = setTimeout(() => syncGithub({ silent: true }), 1200);
+        githubTimer = setTimeout(() => syncGithub({ silent: true }), 1500);
     }
+
+    // With auto-sync on, also fetch from GitHub regularly and when you come back to the tab
+    let lastAutoPull = 0;
+    function autoPull() {
+        if (!githubConfig.autoSync || !githubConfigured() || document.hidden) return;
+        if (Date.now() - lastAutoPull < 30000) return;
+        lastAutoPull = Date.now();
+        syncGithub({ silent: true, flush: true });
+    }
+    window.addEventListener('focus', autoPull);
+    document.addEventListener('visibilitychange', autoPull);
+    setInterval(autoPull, 120000);
 
     $('githubOpenBtn').addEventListener('click', showGithubSettings);
     $('githubClose').addEventListener('click', closeModals);
@@ -1603,7 +1872,7 @@
             });
             if (!repoResponse.ok) throw new Error(repoResponse.status === 404
                 ? 'Repository not found or token has no access'
-                : `GitHub gaf fout ${repoResponse.status}`);
+                : `GitHub error ${repoResponse.status}`);
             await githubRequest('GET');
             toast('GitHub connection works');
         } catch (err) {
@@ -1625,8 +1894,10 @@
             app: 'Remindate',
             version: 1,
             exportedAt: new Date().toISOString(),
+            updatedAt: state.updatedAt,
             folders: state.folders,
-            notes: state.notes
+            notes: state.notes,
+            deleted: state.deleted
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
         const a = document.createElement('a');
@@ -1638,17 +1909,18 @@
 
     function importData(file) {
         const reader = new FileReader();
-        reader.onload = () => {
+        reader.onload = async () => {
             try {
                 const data = JSON.parse(reader.result);
                 const notes = Array.isArray(data) ? data : data.notes;
                 const folders = Array.isArray(data) ? [] : (data.folders || []);
                 if (!Array.isArray(notes)) throw new Error('No notes found');
 
-                if (!confirm('This replaces your current notes and folders. Continue?')) return;
+                if (!(await askConfirm('Restore backup', 'This replaces your current notes and folders. Continue?', 'Replace'))) return;
 
                 state.notes = notes.map((n) => { migrateNote(n); return n; });
                 state.folders = Array.isArray(folders) ? folders : [];
+                state.folders.forEach(migrateFolder);
                 state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
                 state.currentFolderId = noteById(state.currentNoteId)?.folderId || null;
                 state.prefs.expandedFolders = ['__none', ...state.folders.map((f) => f.id)];
@@ -1660,7 +1932,7 @@
                 renderEditor();
                 toast('Backup imported');
             } catch (err) {
-                alert('Could not read this file: ' + err.message);
+                toast('Could not read this file: ' + err.message);
             }
         };
         reader.readAsText(file);
@@ -1975,9 +2247,10 @@
         return {
             app: 'Remindate',
             version: 1,
-            updatedAt: new Date().toISOString(),
+            updatedAt: state.updatedAt,
             folders: state.folders,
-            notes: state.notes
+            notes: state.notes,
+            deleted: state.deleted
         };
     }
 
@@ -1987,13 +2260,11 @@
         if (!Array.isArray(notes)) throw new Error('No notes found in notes.json');
         state.notes = notes.map((n) => { migrateNote(n); return n; });
         state.folders = Array.isArray(folders) ? folders : [];
+        state.folders.forEach(migrateFolder);
+        if (!Array.isArray(data)) state.deleted = normalizeDeleted(data.deleted);
         state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
         state.currentFolderId = noteById(state.currentNoteId)?.folderId || null;
-        if (!state.prefs.expandedFolders.length) {
-            state.prefs.expandedFolders = ['__none', ...state.folders.map((f) => f.id)];
-        } else {
-            state.prefs.expandedFolders = ['__none', ...state.folders.map((f) => f.id)];
-        }
+        state.prefs.expandedFolders = ['__none', ...state.folders.map((f) => f.id)];
         saveNotes();
         saveFolders();
         renderTree();

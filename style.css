@@ -467,7 +467,7 @@ button:disabled {
 }
 
 .view {
-    max-width: 900px;
+    max-width: 1200px;
     margin: 0 auto;
     display: flex;
     flex-direction: column;
@@ -1218,3 +1218,23 @@ input[type="color"] {
     .calendar-chips { display:none; }
     .calendar-day .calendar-dot { display:block; }
 }
+
+/* in-app dialogs (rename / confirm) */
+.dialog-modal { z-index: 130; }
+.dialog-message { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+.dialog-message[hidden], #dialogInput[hidden] { display: none; }
+
+/* rename / delete buttons on notes (explorer + calendar day list) */
+.note-item, .calendar-note-item { position: relative; }
+.item-actions {
+    position: absolute; top: 5px; right: 6px;
+    display: flex; gap: 4px;
+    opacity: 0; transition: opacity .12s;
+}
+.item-actions .folder-action-btn { background: var(--panel); }
+.note-item:hover .item-actions, .note-item:focus-within .item-actions,
+.calendar-note-item:hover .item-actions, .calendar-note-item:focus-within .item-actions { opacity: 1; }
+@media (hover: none) { .item-actions { opacity: 1; } }
+.github-status { cursor: default; }
+.note-item:hover .note-item-title, .note-item:focus-within .note-item-title { padding-right: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (hover: none) { .note-item .note-item-title { padding-right: 112px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } }
