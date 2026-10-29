@@ -209,8 +209,8 @@
                     <span class="folder-chevron">${expanded ? 'â–¾' : 'â–¸'}</span>
                     <span class="folder-name">${escapeHtml(folder.name || 'Folder')}</span>
                     <span class="folder-actions">
-                        <button class="icon-btn folder-rename" data-folder-id="${folder.id}" title="Rename">âœŽ</button>
-                        <button class="icon-btn folder-delete" data-folder-id="${folder.id}" title="Delete folder">ðŸ—‘</button>
+                        <button class="folder-action-btn folder-rename" data-folder-id="${folder.id}" title="Rename folder">Rename</button>
+                        <button class="folder-action-btn folder-delete" data-folder-id="${folder.id}" title="Delete folder">Delete</button>
                     </span>
                 </div>
                 ${expanded ? `<div class="folder-items">${notes.length ? notes.map(noteItemHtml).join('') : '<div class="folder-empty">Empty</div>'}</div>` : ''}
@@ -333,6 +333,12 @@
     function newNote() {
         flushEditor();
         const now = new Date().toISOString();
+        state.currentFolderId = null;
+        state.draw.strokes = [];
+        state.draw.tool = 'pen';
+        state.draw.drawing = false;
+        state.draw.current = null;
+        state.prefs.mode = 'text';
         const note = {
             id: uid(),
             title: '',
@@ -340,10 +346,12 @@
             createdAt: now,
             modifiedAt: now,
             scheduledAt: null,
-            folderId: state.currentFolderId || null,
+            folderId: null,
             alarmEnabled: false,
             alarmRepeatCount: 0,
             alarmSnoozeMinutes: 5,
+            repeatWeekdays: [],
+            repeatEndDate: '',
             canvasBackground: '#ffffff',
             strokes: []
         };
@@ -1531,14 +1539,28 @@
     $('alarmSoundFile').addEventListener('change', (e) => {
         const file = e.target.files && e.target.files[0]; if (!file) return;
         const reader = new FileReader();
-        reader.onload = () => { try { localStorage.setItem('remindate.alarmSound.v1', reader.result); toast('Custom alarm sound saved'); } catch (_) { toast('This sound file is too large to store in browser storage'); } };
+        reader.onload = () => {
+            try {
+                localStorage.setItem('remindate.alarmSound.v1', reader.result);
+                $('alarmSoundStatus').textContent = `Using custom sound: ${file.name}`;
+                toast('Custom alarm sound saved');
+            } catch (_) { toast('This sound file is too large to store in browser storage'); }
+        };
         reader.readAsDataURL(file);
     });
     $('standardAlarmSoundBtn').addEventListener('click', () => {
         localStorage.removeItem('remindate.alarmSound.v1');
         $('alarmSoundFile').value = '';
+        $('alarmSoundStatus').textContent = 'Using standard sound';
         toast('Standard alarm sound selected');
     });
+    $('openAlarmSoundSettings').addEventListener('click', () => {
+        const customSound = localStorage.getItem('remindate.alarmSound.v1');
+        $('alarmSoundStatus').textContent = customSound ? 'Using a custom sound' : 'Using standard sound';
+        $('alarmSoundModal').classList.add('active');
+    });
+    $('alarmSoundClose').addEventListener('click', closeModals);
+    $('alarmSoundBackdrop').addEventListener('click', closeModals);
     function nextWeekdayOccurrence(note, afterTime) {
         const base = parseDate(note.scheduledAt); if (!base) return null;
         const weekdays = new Set(note.repeatWeekdays || []);

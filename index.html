@@ -114,9 +114,7 @@
                                 <input type="range" id="snoozeMinutes" min="1" max="60" value="5">
                                 <span class="step-value" id="snoozeMinutesLabel">5</span>
                             </div>
-                            <label class="plan-row" for="alarmSoundFile">Alarm sound (MP3, MP4 audio, WAV)</label>
-                            <input type="file" id="alarmSoundFile" accept="audio/mpeg,audio/mp4,audio/wav,audio/x-wav,.mp3,.mp4,.wav">
-                            <button class="btn" id="standardAlarmSoundBtn" type="button">Use standard sound</button>
+                            <button class="btn alarm-sound-settings-btn" id="openAlarmSoundSettings" type="button">Alarm Sound Settings</button>
                         </div>
                     </div>
 
@@ -220,6 +218,21 @@
                 <button class="btn" id="planFromTreeCancel">Cancel</button>
                 <button class="btn btn-primary" id="planFromTreeSave">Save</button>
             </div>
+        </div>
+    </div>
+
+    <div class="modal" id="alarmSoundModal">
+        <div class="modal-backdrop" id="alarmSoundBackdrop"></div>
+        <div class="modal-content alarm-sound-modal">
+            <div class="modal-header">
+                <div>Alarm Sound Settings</div>
+                <button class="icon-btn" id="alarmSoundClose" title="Close">&times;</button>
+            </div>
+            <p class="alarm-sound-description">The standard alarm sound is active by default. Choose a custom MP3, MP4 audio, or WAV file if you prefer.</p>
+            <div class="alarm-sound-status" id="alarmSoundStatus">Using standard sound</div>
+            <label class="plan-row" for="alarmSoundFile">Custom sound</label>
+            <input type="file" id="alarmSoundFile" accept="audio/mpeg,audio/mp4,audio/wav,audio/x-wav,.mp3,.mp4,.wav">
+            <button class="btn" id="standardAlarmSoundBtn" type="button">Use standard sound</button>
         </div>
     </div>
 
