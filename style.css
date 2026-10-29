@@ -51,6 +51,10 @@ button:disabled {
     grid-template-columns: 1fr 8px var(--sidebar-width);
 }
 
+.app .sidebar { grid-column: 1; grid-row: 1; }
+.app .sidebar-splitter { grid-column: 2; grid-row: 1; }
+.app .main { grid-column: 3; grid-row: 1; }
+
 .app.sidebar-right .sidebar {
     grid-column: 3;
     grid-row: 1;
@@ -1132,6 +1136,10 @@ input[type="color"] {
     }
 
     .expand-sidebar {
+        display: block !important;
+    }
+
+    .app.mobile-open .expand-sidebar {
         display: none !important;
     }
 
@@ -1187,3 +1195,7 @@ input[type="color"] {
 .alarm-sound-status { padding:9px 11px; border:1px solid var(--border); border-radius:7px; background:var(--card); }
 .alarm-sound-settings-btn { align-self:flex-start; font-size:12px; padding:6px 9px; }
 .calendar-day.today { border-color:#fbbf24 !important; box-shadow:inset 0 0 0 1px rgba(251,191,36,.6) !important; }
+
+.note-item.drop-before { box-shadow: inset 0 2px 0 var(--primary); }
+.note-item.drop-after { box-shadow: inset 0 -2px 0 var(--primary); }
+.settings-empty { color: var(--text-dim); font-size: 13px; }

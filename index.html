@@ -68,7 +68,7 @@
                     <button class="tab active" id="tabNote">Note</button>
                     <button class="tab" id="tabCalendar">Calendar</button>
                 </div>
-                <button class="icon-btn" id="toggleSidebarMain" title="Open sidebar">&#9776;</button>
+                <button class="icon-btn" id="toggleSidebarMain" title="Settings">&#9776;</button>
             </div>
 
             <div class="content">
@@ -233,6 +233,18 @@
             <label class="plan-row" for="alarmSoundFile">Custom sound</label>
             <input type="file" id="alarmSoundFile" accept="audio/mpeg,audio/mp4,audio/wav,audio/x-wav,.mp3,.mp4,.wav">
             <button class="btn" id="standardAlarmSoundBtn" type="button">Use standard sound</button>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal" id="settingsModal">
+        <div class="modal-backdrop" id="settingsBackdrop"></div>
+        <div class="modal-content settings-modal">
+            <div class="modal-header">
+                <div>Settings</div>
+                <button class="icon-btn" id="settingsClose" title="Close">&times;</button>
+            </div>
+            <div class="settings-empty">No settings yet.</div>
         </div>
     </div>
 

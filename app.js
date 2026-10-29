@@ -180,19 +180,38 @@
     const treeEl = $('tree');
     const emptyEl = $('emptyExplorer');
 
+    function byModifiedDesc(a, b) {
+        return (Date.parse(b.modifiedAt) || 0) - (Date.parse(a.modifiedAt) || 0);
+    }
+
+    // Manual order (drag & drop in the explorer). Notes without an order
+    // (older data) get one based on their last-modified date.
+    function ensureNoteOrder() {
+        const missing = state.notes.filter((n) => typeof n.order !== 'number');
+        if (!missing.length) return;
+        const max = state.notes.reduce((m, n) => (typeof n.order === 'number' ? Math.max(m, n.order) : m), -1);
+        missing.sort(byModifiedDesc).forEach((n, i) => { n.order = max + 1 + i; });
+        saveNotes();
+    }
+
     function sortedNotes(notes) {
         return notes.slice().sort((a, b) => {
-            const aTime = Date.parse(a.modifiedAt) || 0;
-            const bTime = Date.parse(b.modifiedAt) || 0;
-            return bTime - aTime;
+            const ao = typeof a.order === 'number' ? a.order : Infinity;
+            const bo = typeof b.order === 'number' ? b.order : Infinity;
+            if (ao !== bo) return ao - bo;
+            return byModifiedDesc(a, b);
         });
+    }
+
+    function topOrder() {
+        return state.notes.reduce((m, n) => (typeof n.order === 'number' ? Math.min(m, n.order) : m), 0) - 1;
     }
 
     function noteItemHtml(note) {
         const preview = note.content.trim()
             ? note.content.replace(/\s+/g, ' ').trim().slice(0, 60)
             : (note.strokes.length ? 'Drawing' : 'Empty note');
-        const meta = note.scheduledAt ? ` Â· ${formatDateTime(note.scheduledAt)}` : '';
+        const meta = note.scheduledAt ? ` · ${formatDateTime(note.scheduledAt)}` : '';
         return `<div class="note-item ${note.id === state.currentNoteId ? 'active' : ''}" data-note-id="${note.id}">
             <div class="note-item-title">${escapeHtml(note.title.trim() || 'Untitled')}</div>
             <div class="note-item-meta">${escapeHtml(preview)}${meta}</div>
@@ -200,6 +219,7 @@
     }
 
     function renderTree() {
+        ensureNoteOrder();
         treeEl.innerHTML = '';
         const unfiled = sortedNotes(state.notes.filter((n) => !n.folderId));
 
@@ -262,9 +282,31 @@
         }
     }
 
+    function clearTreeDropMarkers() {
+        treeEl.querySelectorAll('.drop-before, .drop-after').forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+    }
+
     function onTreeNoteDragEnd() {
         draggedTreeNoteId = null;
+        clearTreeDropMarkers();
         document.querySelectorAll('.calendar-day.drag-over').forEach((el) => el.classList.remove('drag-over'));
+    }
+
+    // Move a note so it sits before/after another note (and in that note's folder).
+    function moveNoteNextTo(noteId, targetId, after) {
+        const note = noteById(noteId);
+        const target = noteById(targetId);
+        if (!note || !target || note.id === target.id) return;
+        const folderId = target.folderId || null;
+        const siblings = sortedNotes(state.notes.filter((n) => (n.folderId || null) === folderId && n.id !== note.id));
+        const index = siblings.indexOf(target) + (after ? 1 : 0);
+        siblings.splice(index, 0, note);
+        siblings.forEach((n, i) => { n.order = i; });
+        note.folderId = folderId;
+        if (note.id === state.currentNoteId) state.currentFolderId = folderId;
+        saveNotes();
+        renderTree();
+        renderEditor();
     }
 
     treeEl.addEventListener('click', (e) => {
@@ -299,6 +341,17 @@
     });
 
     treeEl.addEventListener('dragover', (e) => {
+        const item = e.target.closest('.note-item');
+        if (item && draggedTreeNoteId) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            clearTreeDropMarkers();
+            if (item.dataset.noteId === draggedTreeNoteId) return;
+            const rect = item.getBoundingClientRect();
+            const after = e.clientY > rect.top + rect.height / 2;
+            item.classList.add(after ? 'drop-after' : 'drop-before');
+            return;
+        }
         const header = e.target.closest('.folder-header');
         if (!header) return;
         if (!draggedTreeNoteId && !e.dataTransfer.types.includes('text/plain')) return;
@@ -307,10 +360,19 @@
         header.classList.add('drag-over');
     });
     treeEl.addEventListener('dragleave', (e) => {
+        if (!treeEl.contains(e.relatedTarget)) clearTreeDropMarkers();
         const header = e.target.closest('.folder-header');
         if (header && !header.contains(e.relatedTarget)) header.classList.remove('drag-over');
     });
     treeEl.addEventListener('drop', (e) => {
+        const item = e.target.closest('.note-item');
+        if (item && draggedTreeNoteId) {
+            e.preventDefault();
+            const after = item.classList.contains('drop-after');
+            clearTreeDropMarkers();
+            moveNoteNextTo(draggedTreeNoteId, item.dataset.noteId, after);
+            return;
+        }
         const header = e.target.closest('.folder-header');
         if (!header) return;
         e.preventDefault();
@@ -358,7 +420,8 @@
             repeatWeekdays: [],
             repeatEndDate: '',
             canvasBackground: '#ffffff',
-            strokes: []
+            strokes: [],
+            order: topOrder()
         };
         state.notes.push(note);
         saveNotes();
@@ -1100,7 +1163,6 @@
         app.classList.toggle('sidebar-right', state.prefs.sidebarSide === 'right');
         const collapsed = state.prefs.sidebarCollapsed && !isMobile();
         app.classList.toggle('sidebar-collapsed', collapsed);
-        $('toggleSidebarMain').title = isMobile() ? 'Open sidebar' : 'Move sidebar left or right';
         $('toggleSidebarSide').title = isMobile() ? 'Close sidebar' : 'Move sidebar left or right';
         $('expandSidebar').style.display = collapsed ? 'block' : 'none';
         $('expandSidebar').style.left = state.prefs.sidebarSide === 'right' ? 'auto' : '8px';
@@ -1120,10 +1182,12 @@
     }
 
     $('toggleSidebarSide').addEventListener('click', toggleSidebarSide);
+    // Hamburger button: opens the settings window
     $('toggleSidebarMain').addEventListener('click', () => {
-        if (isMobile()) app.classList.toggle('mobile-open');
-        else toggleSidebarSide();
+        $('settingsModal').classList.add('active');
     });
+    $('settingsClose').addEventListener('click', closeModals);
+    $('settingsBackdrop').addEventListener('click', closeModals);
 
     $('collapseSidebar').addEventListener('click', () => {
         if (isMobile()) {
@@ -1136,6 +1200,10 @@
     });
 
     $('expandSidebar').addEventListener('click', () => {
+        if (isMobile()) {
+            app.classList.add('mobile-open');
+            return;
+        }
         state.prefs.sidebarCollapsed = false;
         savePrefs();
         applyLayout();
@@ -1269,7 +1337,7 @@
     async function syncGithub(options = {}) {
         if (!githubConfigured() || githubBusy) return;
         githubBusy = true;
-        updateGithubStatus('GitHub: syncingâ€¦');
+        updateGithubStatus('GitHub: syncing…');
         try {
             if (options.flush !== false) flushEditor();
             let remote = await githubRequest('GET');
@@ -1677,9 +1745,9 @@
         const el = $('syncStatus');
         if (!el) return;
         if (fileSync.enabled && fileSync.handle) {
-            el.textContent = `Linked to notes.json â€¢ Auto-save â€¢ ${fileSync.handle.name || ''}`;
+            el.textContent = `Linked to notes.json • Auto-save • ${fileSync.handle.name || ''}`;
         } else {
-            el.textContent = 'No file linked â€¢ Local storage only â€¢ Use "Choose notes.json" or export/import';
+            el.textContent = 'No file linked • Local storage only • Use “Choose notes.json” or export/import';
         }
     }
 
