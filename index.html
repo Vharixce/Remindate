@@ -48,6 +48,7 @@
             </div>
             <div class="sidebar-footer">
                 <button class="footer-btn" id="importBtn" title="Restore a backup">↑ Restore</button>
+                <button class="footer-btn" id="trashBtn" title="Recently deleted notes">🗑 Trash</button>
                 <input type="file" id="importFile" accept="application/json,.json" hidden>
             </div>
             <div class="sidebar-footer">
@@ -250,7 +251,24 @@
             <input type="text" id="dialogInput" autocomplete="off">
             <div class="modal-actions">
                 <button class="btn" id="dialogCancel">Cancel</button>
+                <button class="btn" id="dialogAlt" hidden></button>
                 <button class="btn btn-primary" id="dialogOk">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trash -->
+    <div class="modal" id="trashModal">
+        <div class="modal-backdrop" id="trashBackdrop"></div>
+        <div class="modal-content trash-modal">
+            <div class="modal-header">
+                <div>Trash</div>
+                <button class="icon-btn" id="trashClose" title="Close">&times;</button>
+            </div>
+            <div class="trash-help">Deleted notes stay here for 30 days on this device.</div>
+            <div class="trash-list" id="trashList"></div>
+            <div class="modal-actions">
+                <button class="btn btn-danger" id="emptyTrashBtn">Empty trash</button>
             </div>
         </div>
     </div>

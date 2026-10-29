@@ -12,6 +12,7 @@
         alarms: 'remindate.alarms.v1',
         fileHandle: 'remindate.fileHandle.v1',
         deleted: 'remindate.deleted.v1',
+        trash: 'remindate.trash.v1',
         updatedAt: 'remindate.updatedAt.v1',
         github: 'remindate.github.v1'
     };
@@ -50,6 +51,8 @@
         deleted: { notes: {}, folders: {} },
         // Time of the last local change (ISO); compared with GitHub's version.
         updatedAt: null,
+        // Recently deleted notes on this device: [{ note, deletedAt }]
+        trash: [],
         currentNoteId: null,
         currentFolderId: null,
         calendarCursor: new Date(),
@@ -100,6 +103,8 @@
         if (!state.alarms || typeof state.alarms !== 'object') state.alarms = {};
         state.deleted = normalizeDeleted(readJSON(STORAGE.deleted, null));
         state.updatedAt = readJSON(STORAGE.updatedAt, null);
+        state.trash = readJSON(STORAGE.trash, []);
+        if (!Array.isArray(state.trash)) state.trash = [];
 
         state.notes.forEach(migrateNote);
         state.folders.forEach(migrateFolder);
@@ -133,6 +138,7 @@
         note.repeatEndDate = note.repeatEndDate || '';
         note.canvasBackground = note.canvasBackground || '#ffffff';
         note.strokes = Array.isArray(note.strokes) ? note.strokes : [];
+        note.skipDates = Array.isArray(note.skipDates) ? note.skipDates : [];
     }
 
     // Every local change records "now" as the time of the latest local version
@@ -222,6 +228,7 @@
     function occurrenceOn(note, day) {
         const base = parseDate(note.scheduledAt);
         if (!base) return null;
+        if (note.skipDates && note.skipDates.length && note.skipDates.includes(dayKey(day))) return null;
         const occ = new Date(day.getFullYear(), day.getMonth(), day.getDate(),
             base.getHours(), base.getMinutes(), base.getSeconds());
         if (sameDay(base, day)) return occ;
@@ -328,18 +335,29 @@
         </div>`;
     }
 
+    function sortedFolders() {
+        return state.folders
+            .map((f, i) => ({ f, i }))
+            .sort((a, b) => {
+                const ao = typeof a.f.order === 'number' ? a.f.order : a.i;
+                const bo = typeof b.f.order === 'number' ? b.f.order : b.i;
+                return ao - bo || a.i - b.i;
+            })
+            .map((x) => x.f);
+    }
+
     function renderTree() {
         ensureNoteOrder();
         treeEl.innerHTML = '';
         const unfiled = sortedNotes(state.notes.filter((n) => !n.folderId));
 
-        state.folders.forEach((folder) => {
+        sortedFolders().forEach((folder) => {
             const notes = sortedNotes(state.notes.filter((n) => n.folderId === folder.id));
             const expanded = state.prefs.expandedFolders.includes(folder.id);
             const group = document.createElement('div');
             group.className = 'folder';
             group.innerHTML = `
-                <div class="folder-header" data-folder-id="${folder.id}">
+                <div class="folder-header" data-folder-id="${folder.id}" draggable="true" title="Drag to reorder">
                     <span class="folder-chevron">${expanded ? '&#9662;' : '&#9656;'}</span>
                     <span class="folder-name">${escapeHtml(folder.name || 'Folder')}</span>
                     <span class="folder-actions">
@@ -368,6 +386,40 @@
 
         emptyEl.style.display = state.notes.length ? 'none' : 'block';
         makeTreeNotesDraggable();
+        updateTrashButton();
+    }
+
+    /* ---- folder drag & drop (reorder) ---- */
+    let draggedFolderId = null;
+
+    treeEl.addEventListener('dragstart', (e) => {
+        const header = e.target.closest && e.target.closest('.folder-header[draggable="true"]');
+        if (!header || e.target.closest('.note-item')) return;
+        draggedFolderId = header.dataset.folderId;
+        e.dataTransfer.setData('application/x-remindate-folder', draggedFolderId);
+        e.dataTransfer.effectAllowed = 'move';
+        header.classList.add('dragging');
+    });
+    treeEl.addEventListener('dragend', () => {
+        draggedFolderId = null;
+        treeEl.querySelectorAll('.folder-header.dragging').forEach((el) => el.classList.remove('dragging'));
+        clearTreeDropMarkers();
+    });
+
+    function moveFolderNextTo(folderId, targetId, after) {
+        if (folderId === targetId) return;
+        const list = sortedFolders();
+        const folder = list.find((f) => f.id === folderId);
+        if (!folder) return;
+        const rest = list.filter((f) => f.id !== folderId);
+        let index = targetId === '__none' ? rest.length : rest.findIndex((f) => f.id === targetId) + (after ? 1 : 0);
+        if (index < 0) index = rest.length;
+        rest.splice(index, 0, folder);
+        const now = new Date().toISOString();
+        rest.forEach((f, i) => { if (f.order !== i) { f.order = i; f.modifiedAt = now; } });
+        state.folders = rest;
+        saveFolders();
+        renderTree();
     }
 
     function makeTreeNotesDraggable() {
@@ -477,6 +529,18 @@
     });
 
     treeEl.addEventListener('dragover', (e) => {
+        if (draggedFolderId) {
+            const target = e.target.closest('.folder-header');
+            clearTreeDropMarkers();
+            if (!target) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            if (target.dataset.folderId === draggedFolderId) return;
+            const rect = target.getBoundingClientRect();
+            const after = target.dataset.folderId === '__none' ? false : e.clientY > rect.top + rect.height / 2;
+            target.classList.add(after ? 'drop-after' : 'drop-before');
+            return;
+        }
         const item = e.target.closest('.note-item');
         if (item && draggedTreeNoteId) {
             e.preventDefault();
@@ -501,6 +565,17 @@
         if (header && !header.contains(e.relatedTarget)) header.classList.remove('drag-over');
     });
     treeEl.addEventListener('drop', (e) => {
+        if (draggedFolderId) {
+            const target = e.target.closest('.folder-header');
+            const after = !!target && target.classList.contains('drop-after');
+            const id = draggedFolderId;
+            draggedFolderId = null;
+            clearTreeDropMarkers();
+            if (!target) return;
+            e.preventDefault();
+            moveFolderNextTo(id, target.dataset.folderId, after);
+            return;
+        }
         const item = e.target.closest('.note-item');
         if (item && draggedTreeNoteId) {
             e.preventDefault();
@@ -576,6 +651,7 @@
         if (!ok || !noteById(id)) return;
         state.notes = state.notes.filter((n) => n.id !== note.id);
         state.deleted.notes[note.id] = new Date().toISOString();
+        addToTrash(note);
         delete state.alarms[note.id];
         saveNotes();
         saveAlarms();
@@ -586,8 +662,102 @@
         }
         renderTree();
         if (state.prefs.activeTab === 'calendar') renderCalendar();
-        toast('Note deleted');
+        toast('Note moved to trash', { label: 'Undo', onClick: () => restoreFromTrash(note.id) });
     }
+
+    /* ---------------- trash ---------------- */
+
+    const TRASH_DAYS = 30;
+
+    function saveTrash() {
+        const cutoff = Date.now() - TRASH_DAYS * 86400000;
+        state.trash = state.trash.filter((t) => (Date.parse(t.deletedAt) || 0) > cutoff).slice(0, 100);
+        writeJSON(STORAGE.trash, state.trash);
+        updateTrashButton();
+    }
+
+    function addToTrash(note) {
+        state.trash = state.trash.filter((t) => t.note.id !== note.id);
+        state.trash.unshift({ note: JSON.parse(JSON.stringify(note)), deletedAt: new Date().toISOString() });
+        saveTrash();
+    }
+
+    function updateTrashButton() {
+        const btn = $('trashBtn');
+        if (btn) btn.textContent = `🗑 Trash${state.trash.length ? ` (${state.trash.length})` : ''}`;
+    }
+
+    function restoreFromTrash(id) {
+        const entry = state.trash.find((t) => t.note.id === id);
+        if (!entry) return;
+        const note = entry.note;
+        migrateNote(note);
+        note.modifiedAt = new Date().toISOString(); // newer than the delete, so sync keeps it
+        if (note.folderId && !state.folders.some((f) => f.id === note.folderId)) note.folderId = null;
+        delete state.deleted.notes[id];
+        state.notes = state.notes.filter((n) => n.id !== id);
+        state.notes.push(note);
+        state.trash = state.trash.filter((t) => t.note.id !== id);
+        saveTrash();
+        resetAlarmRuntime(note);
+        saveNotes();
+        renderTree();
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
+        renderTrash();
+        toast(`Restored "${note.title.trim() || 'Untitled'}"`);
+    }
+
+    function renderTrash() {
+        const host = $('trashList');
+        if (!host) return;
+        $('emptyTrashBtn').disabled = !state.trash.length;
+        if (!state.trash.length) {
+            host.innerHTML = '<div class="calendar-hint">Trash is empty.</div>';
+            return;
+        }
+        host.innerHTML = state.trash.map((t) => {
+            const preview = (t.note.content || '').replace(/\s+/g, ' ').trim().slice(0, 70) ||
+                ((t.note.strokes || []).length ? 'Drawing' : 'Empty note');
+            return `<div class="trash-item">
+                <div class="trash-text">
+                    <div class="trash-title">${escapeHtml((t.note.title || '').trim() || 'Untitled')}</div>
+                    <div class="trash-meta">Deleted ${formatDateTime(toLocalIso(new Date(t.deletedAt)))} · ${escapeHtml(preview)}</div>
+                </div>
+                <button class="folder-action-btn trash-restore" data-note-id="${t.note.id}">Restore</button>
+                <button class="folder-action-btn folder-delete trash-forever" data-note-id="${t.note.id}">Delete forever</button>
+            </div>`;
+        }).join('');
+    }
+
+    $('trashBtn').addEventListener('click', () => {
+        saveTrash();
+        renderTrash();
+        openModal('trashModal');
+    });
+    $('trashClose').addEventListener('click', closeModals);
+    $('trashBackdrop').addEventListener('click', closeModals);
+    $('trashList').addEventListener('click', async (e) => {
+        const restore = e.target.closest('.trash-restore');
+        if (restore) { restoreFromTrash(restore.dataset.noteId); return; }
+        const forever = e.target.closest('.trash-forever');
+        if (forever) {
+            const ok = await askConfirm('Delete forever', 'This note will be gone for good. Continue?', 'Delete');
+            if (!ok) return;
+            state.trash = state.trash.filter((t) => t.note.id !== forever.dataset.noteId);
+            saveTrash();
+            renderTrash();
+            openModal('trashModal');
+        }
+    });
+    $('emptyTrashBtn').addEventListener('click', async () => {
+        if (!state.trash.length) return;
+        const ok = await askConfirm('Empty trash', `Permanently delete ${state.trash.length} note(s)?`, 'Delete');
+        if (!ok) { openModal('trashModal'); return; }
+        state.trash = [];
+        saveTrash();
+        renderTrash();
+        openModal('trashModal');
+    });
 
     async function renameNote(id) {
         flushEditor();
@@ -705,7 +875,8 @@
     $('newFolderBtn').addEventListener('click', async () => {
         const name = await askText('New folder', 'New folder', 'Create');
         if (!name || !name.trim()) return;
-        const folder = { id: uid(), name: name.trim(), modifiedAt: new Date().toISOString() };
+        const folder = { id: uid(), name: name.trim(), modifiedAt: new Date().toISOString(),
+            order: state.folders.reduce((m, f) => Math.max(m, typeof f.order === 'number' ? f.order : 0), -1) + 1 };
         state.folders.push(folder);
         state.prefs.expandedFolders.push(folder.id);
         saveFolders();
@@ -924,6 +1095,7 @@
         host.innerHTML = `<div class="calendar-day-title">${label}</div>` + (notes.length
             ? notes.map((n) => `<div class="calendar-note-item" draggable="true" data-note-id="${n.id}" title="Click to open – drag to another day">
                     <span class="item-actions">
+                        <button class="folder-action-btn note-unschedule" data-note-id="${n.id}" title="Remove this note/alarm from this date">Remove from date</button>
                         <button class="folder-action-btn note-rename" data-note-id="${n.id}" title="Rename note">Rename</button>
                         <button class="folder-action-btn folder-delete note-delete" data-note-id="${n.id}" title="Delete note">Delete</button>
                     </span>
@@ -1024,7 +1196,48 @@
         draggedTreeNoteId = null;
     });
 
+    // Take a note (and its alarm) off a date. The note itself is kept.
+    // For a repeating note you choose: skip only this day, or remove the whole series.
+    async function removeFromDate(noteId, day) {
+        const note = noteById(noteId);
+        if (!note || !day) return;
+        const title = note.title.trim() || 'Untitled';
+        const dateLabel = `${day.getDate()} ${MONTHS[day.getMonth()]}`;
+        let choice;
+        if (isRecurring(note)) {
+            choice = await askDialog({
+                title: 'Remove from date',
+                message: `"${title}" repeats. Remove it only from ${dateLabel}, or remove the whole repeating schedule?`,
+                okLabel: 'Only this day',
+                altLabel: 'Whole series'
+            });
+            if (!choice) return;
+        } else {
+            choice = await askConfirm('Remove from date', `Remove "${title}" (and its alarm) from ${dateLabel}? The note itself is kept.`, 'Remove');
+            if (!choice) return;
+            choice = 'alt';
+        }
+        if (!noteById(noteId)) return;
+        if (choice === 'alt') {
+            note.scheduledAt = null;
+            note.alarmEnabled = false;
+            note.repeatWeekdays = [];
+            note.repeatEndDate = '';
+            note.skipDates = [];
+        } else {
+            note.skipDates = [...new Set([...(note.skipDates || []), dayKey(day)])].sort();
+        }
+        resetAlarmRuntime(note);
+        touch(note);
+        renderTree();
+        renderCalendar();
+        if (note.id === state.currentNoteId) updateScheduleUi(note);
+        toast(choice === 'alt' ? `Removed "${title}" from the calendar` : `Skipped "${title}" on ${dateLabel}`);
+    }
+
     $('calendarDayNotes').addEventListener('click', (e) => {
+        const unschedule = e.target.closest('.note-unschedule');
+        if (unschedule) { removeFromDate(unschedule.dataset.noteId, state.calendarDay); return; }
         const rename = e.target.closest('.note-rename');
         if (rename) { renameNote(rename.dataset.noteId); return; }
         const del = e.target.closest('.note-delete');
@@ -1351,10 +1564,12 @@
      * (e.g. after ticking "prevent this page from creating dialogs"). */
     let dialogResolve = null;
 
-    function askDialog({ title, message = '', input = null, okLabel = 'OK', danger = false }) {
+    function askDialog({ title, message = '', input = null, okLabel = 'OK', danger = false, altLabel = null }) {
         return new Promise((resolve) => {
             if (dialogResolve) finishDialog(false);
             dialogResolve = resolve;
+            $('dialogAlt').hidden = !altLabel;
+            $('dialogAlt').textContent = altLabel || '';
             $('dialogTitle').textContent = title;
             $('dialogMessage').textContent = message;
             $('dialogMessage').hidden = !message;
@@ -1377,6 +1592,7 @@
         const resolve = dialogResolve;
         dialogResolve = null;
         $('dialogModal').classList.remove('active');
+        if (ok === 'alt') { resolve('alt'); return; }
         if ($('dialogInput').hidden) resolve(!!ok);
         else resolve(ok ? $('dialogInput').value : null);
     }
@@ -1387,6 +1603,7 @@
 
     $('dialogOk').addEventListener('click', () => finishDialog(true));
     $('dialogCancel').addEventListener('click', () => finishDialog(false));
+    $('dialogAlt').addEventListener('click', () => finishDialog('alt'));
     $('dialogClose').addEventListener('click', () => finishDialog(false));
     $('dialogBackdrop').addEventListener('click', () => finishDialog(false));
     $('dialogInput').addEventListener('keydown', (e) => {
@@ -1682,7 +1899,10 @@
             });
         };
 
-        const folders = mergeList('folders', local.folders, remote.folders);
+        const folders = mergeList('folders', local.folders, remote.folders)
+            .map((f, i) => ({ f, i }))
+            .sort((a, b) => ((typeof a.f.order === 'number' ? a.f.order : a.i) - (typeof b.f.order === 'number' ? b.f.order : b.i)) || a.i - b.i)
+            .map((x) => x.f);
         const folderIds = new Set(folders.map((f) => f.id));
         const notes = mergeList('notes', local.notes, remote.notes)
             .map((n) => (n.folderId && !folderIds.has(n.folderId) ? { ...n, folderId: null } : n));
@@ -1694,6 +1914,8 @@
     function applySnapshot(snap) {
         const before = stableStringify(noteById(state.currentNoteId) || null);
         const knownFolders = new Set(state.folders.map((f) => f.id));
+        const incomingIds = new Set(snap.notes.map((n) => n.id));
+        state.notes.filter((n) => !incomingIds.has(n.id)).forEach(addToTrash);
         state.notes = snap.notes.map((n) => { migrateNote(n); return n; });
         state.folders = snap.folders;
         state.deleted = snap.deleted;
