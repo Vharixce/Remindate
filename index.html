@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="nl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -13,99 +13,99 @@
 </head>
 <body>
     <div class="app" id="app">
-        <!-- Zijbalk -->
+        <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <div class="sidebar-title">Remindate</div>
                 <div class="sidebar-actions">
-                    <button class="icon-btn" id="toggleSidebarSide" title="Zijbalk links/rechts">⇄</button>
-                    <button class="icon-btn" id="collapseSidebar" title="Zijbalk inklappen">«</button>
+                    <button class="icon-btn" id="toggleSidebarSide" title="Move sidebar left or right">&#8644;</button>
+                    <button class="icon-btn" id="collapseSidebar" title="Collapse sidebar">&#8249;</button>
                 </div>
             </div>
 
             <div class="sidebar-section">
                 <div class="sidebar-section-header">
-                    <div>Verkenner</div>
+                    <div>Explorer</div>
                     <div class="sidebar-section-actions">
-                        <button class="ghost-btn" id="newNoteBtn">+ Notitie</button>
-                        <button class="ghost-btn" id="newFolderBtn">+ Map</button>
+                        <button class="ghost-btn" id="newNoteBtn">+ Note</button>
+                        <button class="ghost-btn" id="newFolderBtn">+ Folder</button>
                     </div>
                 </div>
                 <div class="tree" id="tree"></div>
                 <div class="empty-explorer" id="emptyExplorer" style="display:none;">
-                    <div class="empty-title">Nog geen notities</div>
-                    <div class="empty-sub">Klik op “+ Notitie” om te beginnen.</div>
+                    <div class="empty-title">No notes yet</div>
+                    <div class="empty-sub">Click “+ Note” to get started.</div>
                 </div>
             </div>
 
             <div class="sidebar-footer">
-                <button class="footer-btn" id="pickNotesFileBtn" title="Kies notes.json in je gesynchroniseerde Proton Drive map">📁 Kies notes.json</button>
-                <button class="footer-btn" id="loadFromDirBtn" title="Probeer notes.json te laden uit dezelfde map als deze app">↻ Laden uit map</button>
+                <button class="footer-btn" id="pickNotesFileBtn" title="Choose notes.json in your synced folder">📁 Choose notes.json</button>
+                <button class="footer-btn" id="loadFromDirBtn" title="Try loading notes.json from the app folder">↻ Load from folder</button>
             </div>
             <div class="sidebar-footer">
-                <button class="footer-btn" id="saveToFileBtn" title="Nu direct opslaan naar het gekozen notes.json bestand">💾 Opslaan naar bestand</button>
-                <button class="footer-btn" id="exportBtn" title="Download een back-up van al je notities">↓ Back-up</button>
+                <button class="footer-btn" id="saveToFileBtn" title="Save directly to the selected notes.json file">💾 Save to file</button>
+                <button class="footer-btn" id="exportBtn" title="Download a backup of all notes">↓ Backup</button>
             </div>
             <div class="sidebar-footer">
-                <button class="footer-btn" id="importBtn" title="Back-up terugzetten">↑ Terugzetten</button>
+                <button class="footer-btn" id="importBtn" title="Restore a backup">↑ Restore</button>
                 <input type="file" id="importFile" accept="application/json,.json" hidden>
             </div>
             <div class="sidebar-footer">
-                <button class="footer-btn" id="githubOpenBtn">GitHub Sync instellen</button>
-                <button class="footer-btn" id="githubSyncBtn">Nu syncen</button>
+                <button class="footer-btn" id="githubOpenBtn">GitHub Sync settings</button>
+                <button class="footer-btn" id="githubSyncBtn">Sync now</button>
             </div>
-            <div class="sync-status" id="syncStatus">Geen bestand gekoppeld • Alleen localStorage</div>
-            <div class="github-status" id="githubStatus">GitHub: niet ingesteld</div>
+            <div class="sync-status" id="syncStatus">No file linked • Local storage only</div>
+            <div class="github-status" id="githubStatus">GitHub: not configured</div>
         </aside>
 
-        <div class="sidebar-splitter" id="sidebarSplitter" title="Sleep om de zijbalk te verbreden"></div>
-        <button class="expand-sidebar" id="expandSidebar" title="Zijbalk uitklappen">»</button>
+        <div class="sidebar-splitter" id="sidebarSplitter" title="Drag to resize the sidebar"></div>
+        <button class="expand-sidebar" id="expandSidebar" title="Expand sidebar">&#8250;</button>
 
-        <!-- Hoofdvenster -->
+        <!-- Main panel -->
         <main class="main">
             <div class="topbar">
                 <div class="tabs">
-                    <button class="tab active" id="tabNote">Notitie</button>
-                    <button class="tab" id="tabCalendar">Agenda</button>
+                    <button class="tab active" id="tabNote">Note</button>
+                    <button class="tab" id="tabCalendar">Calendar</button>
                 </div>
-                <button class="icon-btn" id="toggleSidebarMain" title="Zijbalk links/rechts">⇄</button>
+                <button class="icon-btn" id="toggleSidebarMain" title="Open sidebar">&#9776;</button>
             </div>
 
             <div class="content">
-                <!-- Notitie-editor -->
+                <!-- Note-editor -->
                 <section class="view" id="viewNote">
                     <div class="editor-header">
-                        <input type="text" id="noteTitle" class="title-input" placeholder="Titel" autocomplete="off">
+                        <input type="text" id="noteTitle" class="title-input" placeholder="Title" autocomplete="off">
                         <div class="editor-actions">
-                            <button class="btn" id="saveNoteBtn">Opslaan</button>
-                            <button class="btn btn-danger" id="deleteNoteBtn">Verwijderen</button>
+                            <button class="btn" id="saveNoteBtn">Save</button>
+                            <button class="btn btn-danger" id="deleteNoteBtn">Delete</button>
                         </div>
                     </div>
 
                     <div class="editor-toolbar">
                         <div class="mode-toggle">
-                            <button class="toggle-btn active" id="modeText">Tekst</button>
-                            <button class="toggle-btn" id="modeDraw">Tekenen</button>
+                            <button class="toggle-btn active" id="modeText">Text</button>
+                            <button class="toggle-btn" id="modeDraw">Draw</button>
                         </div>
-                        <select id="noteFolder" class="folder-select" title="Map van deze notitie"></select>
+                        <select id="noteFolder" class="folder-select" title="Folder for this note"></select>
                     </div>
 
                     <div class="card schedule-card">
                         <div class="card-header" id="scheduleHeader">
-                            <div>Gepland</div>
+                            <div>Scheduled</div>
                             <div class="card-header-actions">
-                                <button class="icon-btn" id="unscheduleBtn" title="Planning wissen">×</button>
+                                <button class="icon-btn" id="unscheduleBtn" title="Clear schedule">×</button>
                                 <span class="chevron" id="scheduleChevron">▸</span>
                             </div>
                         </div>
                         <div class="schedule-body" id="scheduleBody">
                             <div class="schedule-row">
-                                <input type="date" id="scheduleDate" aria-label="Datum">
-                                <input type="time" id="scheduleTime" step="1" aria-label="Tijd">
+                                <input type="date" id="scheduleDate" aria-label="Date">
+                                <input type="time" id="scheduleTime" step="1" aria-label="Time">
                             </div>
                             <label class="check-row"><input type="checkbox" id="alarmEnabled"> Alarm</label>
                             <div class="step-row">
-                                <span>Herhalen</span>
+                                <span>Repeat</span>
                                 <input type="range" id="repeatCount" min="0" max="10" value="0">
                                 <span class="step-value" id="repeatCountLabel">0</span>
                             </div>
@@ -114,37 +114,40 @@
                                 <input type="range" id="snoozeMinutes" min="1" max="60" value="5">
                                 <span class="step-value" id="snoozeMinutesLabel">5</span>
                             </div>
+                            <label class="plan-row" for="alarmSoundFile">Alarm sound (MP3, MP4 audio, WAV)</label>
+                            <input type="file" id="alarmSoundFile" accept="audio/mpeg,audio/mp4,audio/wav,audio/x-wav,.mp3,.mp4,.wav">
+                            <button class="btn" id="standardAlarmSoundBtn" type="button">Use standard sound</button>
                         </div>
                     </div>
 
                     <div class="card draw-toolbar" id="drawToolbar" style="display:none;">
                         <div class="draw-tools">
-                            <button class="swatch" id="colorSwatch" title="Tekstkleur"></button>
-                            <input type="range" id="brushSize" min="1" max="40" value="6" title="Dikte">
+                            <button class="swatch" id="colorSwatch" title="Text color"></button>
+                            <input type="range" id="brushSize" min="1" max="40" value="6" title="Thickness">
                             <span class="step-value" id="brushSizeLabel">6</span>
                             <button class="tool-btn active" id="toolPen" title="Pen">✎</button>
-                            <button class="tool-btn" id="toolEraser" title="Gum">⌫</button>
-                            <button class="tool-btn" id="toolFill" title="Canvas vullen">▦</button>
-                            <button class="tool-btn" id="toolUndo" title="Ongedaan maken">↶</button>
-                            <button class="tool-btn" id="toolClear" title="Alles wissen">✕</button>
-                            <button class="tool-btn" id="toolCanvasBg" title="Canvasachtergrond">◧</button>
+                            <button class="tool-btn" id="toolEraser" title="Eraser">⌫</button>
+                            <button class="tool-btn" id="toolFill" title="Fill canvas">▦</button>
+                            <button class="tool-btn" id="toolUndo" title="Undo">↶</button>
+                            <button class="tool-btn" id="toolClear" title="Clear all">✕</button>
+                            <button class="tool-btn" id="toolCanvasBg" title="Canvas background">◧</button>
                         </div>
                     </div>
 
                     <div class="editor-body">
-                        <textarea id="noteContent" class="text-editor" placeholder="Schrijf je notitie hier..."></textarea>
+                        <textarea id="noteContent" class="text-editor" placeholder="Write your note here..."></textarea>
                         <div class="draw-container" id="drawContainer" style="display:none;">
                             <canvas id="drawCanvas" width="800" height="600"></canvas>
                         </div>
                     </div>
                 </section>
 
-                <!-- Agenda -->
+                <!-- Calendar -->
                 <section class="view" id="viewCalendar" style="display:none;">
                     <div class="calendar-header">
-                        <button class="icon-btn" id="calPrev" title="Vorige maand">‹</button>
+                        <button class="icon-btn" id="calPrev" title="Previous month">‹</button>
                         <div class="calendar-month" id="calendarMonth"></div>
-                        <button class="icon-btn" id="calNext" title="Volgende maand">›</button>
+                        <button class="icon-btn" id="calNext" title="Next month">›</button>
                     </div>
                     <div class="calendar-weekdays" id="calendarWeekdays"></div>
                     <div class="calendar-grid" id="calendarGrid"></div>
@@ -154,52 +157,52 @@
         </main>
     </div>
 
-    <!-- Kleurenkiezer -->
+    <!-- Color picker -->
     <div class="modal" id="colorModal">
         <div class="modal-backdrop" id="colorBackdrop"></div>
         <div class="modal-content">
             <div class="modal-header">
-                <div>Kies een kleur</div>
-                <button class="icon-btn" id="colorClose" title="Sluiten">×</button>
+                <div>Choose a color</div>
+                <button class="icon-btn" id="colorClose" title="Close">×</button>
             </div>
             <div class="palette" id="palette"></div>
-            <input type="color" id="colorCustom" value="#222222" aria-label="Eigen kleur">
+            <input type="color" id="colorCustom" value="#222222" aria-label="Custom color">
         </div>
     </div>
 
-    <!-- Canvasachtergrond -->
+    <!-- Canvas background -->
     <div class="modal" id="canvasBgModal">
         <div class="modal-backdrop" id="canvasBgBackdrop"></div>
         <div class="modal-content">
             <div class="modal-header">
-                <div>Canvasachtergrond</div>
-                <button class="icon-btn" id="canvasBgClose" title="Sluiten">×</button>
+                <div>Canvas background</div>
+                <button class="icon-btn" id="canvasBgClose" title="Close">×</button>
             </div>
             <div class="palette" id="canvasPalette"></div>
-            <input type="color" id="canvasBgCustom" value="#ffffff" aria-label="Eigen achtergrondkleur">
+            <input type="color" id="canvasBgCustom" value="#ffffff" aria-label="Custom background color">
         </div>
     </div>
 
-    <!-- Notitie inplannen vanaf verkenner -->
+    <!-- Schedule a note from Explorer -->
     <div class="modal" id="planFromTreeModal">
         <div class="modal-backdrop" id="planFromTreeBackdrop"></div>
         <div class="modal-content plan-modal">
             <div class="modal-header">
-                <div>Notitie inplannen</div>
-                <button class="icon-btn" id="planFromTreeClose" title="Sluiten">×</button>
+                <div>Schedule note</div>
+                <button class="icon-btn" id="planFromTreeClose" title="Close">×</button>
             </div>
             <div class="plan-note-title" id="planFromTreeNoteTitle">-</div>
             <div class="plan-row">
-                <label for="planFromTreeDate">Datum</label>
+                <label for="planFromTreeDate">Date</label>
                 <input type="date" id="planFromTreeDate">
             </div>
             <div class="plan-row">
-                <label for="planFromTreeTime">Tijd</label>
+                <label for="planFromTreeTime">Time</label>
                 <input type="time" id="planFromTreeTime" step="1">
             </div>
             <label class="check-row"><input type="checkbox" id="planFromTreeAlarm"> Alarm</label>
             <div class="step-row">
-                <span>Herhalen</span>
+                <span>Repeat</span>
                 <input type="range" id="planFromTreeRepeat" min="0" max="10" value="0">
                 <span class="step-value" id="planFromTreeRepeatLabel">0</span>
             </div>
@@ -208,9 +211,14 @@
                 <input type="range" id="planFromTreeSnooze" min="1" max="60" value="5">
                 <span class="step-value" id="planFromTreeSnoozeLabel">5</span>
             </div>
+            <button class="btn advanced-toggle" id="advancedSettingsToggle" type="button" aria-expanded="false">Advanced settings</button>
+            <div id="advancedSettings" class="advanced-settings" hidden>
+                <div class="weekday-options" id="weekdayOptions"></div>
+                <div class="plan-row"><label for="repeatEndDate">End date</label><input type="date" id="repeatEndDate"></div>
+            </div>
             <div class="modal-actions">
-                <button class="btn" id="planFromTreeCancel">Annuleren</button>
-                <button class="btn btn-primary" id="planFromTreeSave">Opslaan</button>
+                <button class="btn" id="planFromTreeCancel">Cancel</button>
+                <button class="btn btn-primary" id="planFromTreeSave">Save</button>
             </div>
         </div>
     </div>
@@ -220,35 +228,36 @@
         <div class="modal-backdrop" id="githubBackdrop"></div>
         <div class="modal-content github-modal">
             <div class="modal-header">
-                <div>GitHub Sync (privé repo)</div>
-                <button class="icon-btn" id="githubClose" title="Sluiten">×</button>
+                <div>GitHub Sync settings</div>
+                <button class="icon-btn" id="githubClose" title="Close">×</button>
             </div>
             <div class="github-help">
-                Gebruik een <strong>fine-grained PAT</strong> met alleen <code>Contents: Read and write</code> voor je data-repo.
+                Use a <strong>fine-grained PAT</strong> with only <code>Contents: Read and write</code> access to your data repository.
+                <a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener noreferrer">Find personal access tokens in GitHub settings ↗</a>
             </div>
             <div class="plan-row">
-                <label for="ghOwner">Gebruikersnaam / Owner</label>
-                <input type="text" id="ghOwner" placeholder="jouwgithubnaam">
+                <label for="ghOwner">Username / Owner</label>
+                <input type="text" id="ghOwner" placeholder="your-github-username">
             </div>
             <div class="plan-row">
-                <label for="ghRepo">Repository naam</label>
+                <label for="ghRepo">Repository name</label>
                 <input type="text" id="ghRepo" placeholder="remindate-data">
             </div>
             <div class="plan-row">
-                <label for="ghPath">Bestandspad</label>
+                <label for="ghPath">File path</label>
                 <input type="text" id="ghPath" placeholder="notes.json" value="notes.json">
             </div>
             <div class="plan-row">
                 <label for="ghToken">Personal Access Token</label>
                 <input type="password" id="ghToken" placeholder="github_pat_...">
             </div>
-            <label class="check-row"><input type="checkbox" id="ghAutoSync"> Automatisch syncen na wijzigingen</label>
+            <label class="check-row"><input type="checkbox" id="ghAutoSync"> Sync automatically after changes</label>
             <div class="modal-actions">
-                <button class="btn" id="githubTestBtn">Test verbinding</button>
-                <button class="btn" id="githubClearBtn">Wissen</button>
-                <button class="btn btn-primary" id="githubSaveBtn">Opslaan</button>
+                <button class="btn" id="githubTestBtn">Test connection</button>
+                <button class="btn" id="githubClearBtn">Clear</button>
+                <button class="btn btn-primary" id="githubSaveBtn">Save</button>
             </div>
-            <div class="github-tip">Token wordt alleen opgeslagen in localStorage van deze browser.</div>
+            <div class="github-tip">Your token is stored only in this browser local storage.</div>
         </div>
     </div>
 

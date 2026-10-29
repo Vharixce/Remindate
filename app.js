@@ -1,6 +1,6 @@
 /* Remindate Web
- * Notities, mappen, agenda en tekenen. Alle data wordt lokaal in de browser
- * opgeslagen (localStorage), dus er is geen server of account nodig. adawdawd
+ * Notes, folders, calendar and drawing. All data is stored locally in the browser
+ * (local storage), so no server or account is required.
  */
 (() => {
     'use strict';
@@ -26,9 +26,9 @@
         '#0c4a6e', '#1e1b4b', '#4c1d95', '#831843', '#a8a29e', '#57534e'
     ];
 
-    const MONTHS = ['januari', 'februari', 'maart', 'april', 'mei', 'juni',
-        'juli', 'augustus', 'september', 'oktober', 'november', 'december'];
-    const WEEKDAYS = ['ma', 'di', 'wo', 'do', 'vr', 'za', 'zo'];
+    const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
+        'July', 'August', 'September', 'October', 'November', 'December'];
+    const WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
     const state = {
         notes: [],
@@ -67,7 +67,7 @@
             const raw = localStorage.getItem(key);
             return raw ? JSON.parse(raw) : fallback;
         } catch (err) {
-            console.warn('Kon data niet lezen:', key, err);
+            console.warn('Could not read data:', key, err);
             return fallback;
         }
     }
@@ -76,8 +76,8 @@
         try {
             localStorage.setItem(key, JSON.stringify(value));
         } catch (err) {
-            console.error('Opslaan mislukt:', err);
-            toast('Opslaan mislukt: de opslag van je browser is vol of geblokkeerd.');
+            console.error('Save failed:', err);
+            toast('Save failed: your browser storage is full or unavailable.');
         }
     }
 
@@ -106,6 +106,8 @@
         note.alarmEnabled = !!note.alarmEnabled;
         note.alarmRepeatCount = Number(note.alarmRepeatCount) || 0;
         note.alarmSnoozeMinutes = Number(note.alarmSnoozeMinutes) || 5;
+        note.repeatWeekdays = Array.isArray(note.repeatWeekdays) ? note.repeatWeekdays : [];
+        note.repeatEndDate = note.repeatEndDate || '';
         note.canvasBackground = note.canvasBackground || '#ffffff';
         note.strokes = Array.isArray(note.strokes) ? note.strokes : [];
     }
@@ -173,7 +175,7 @@
         saveNotes();
     }
 
-    /* ---------------- zijbalk / mappenboom ---------------- */
+    /* ---------------- sidebar / folder tree ---------------- */
 
     const treeEl = $('tree');
     const emptyEl = $('emptyExplorer');
@@ -185,10 +187,10 @@
     function noteItemHtml(note) {
         const preview = note.content.trim()
             ? note.content.replace(/\s+/g, ' ').trim().slice(0, 60)
-            : (note.strokes.length ? 'Tekening' : 'Lege notitie');
-        const meta = note.scheduledAt ? ` · ${formatDateTime(note.scheduledAt)}` : '';
+            : (note.strokes.length ? 'Drawing' : 'Empty note');
+        const meta = note.scheduledAt ? ` Â· ${formatDateTime(note.scheduledAt)}` : '';
         return `<div class="note-item ${note.id === state.currentNoteId ? 'active' : ''}" data-note-id="${note.id}">
-            <div class="note-item-title">${escapeHtml(note.title.trim() || 'Naamloos')}</div>
+            <div class="note-item-title">${escapeHtml(note.title.trim() || 'Untitled')}</div>
             <div class="note-item-meta">${escapeHtml(preview)}${meta}</div>
         </div>`;
     }
@@ -204,14 +206,14 @@
             group.className = 'folder';
             group.innerHTML = `
                 <div class="folder-header" data-folder-id="${folder.id}">
-                    <span class="folder-chevron">${expanded ? '▾' : '▸'}</span>
-                    <span class="folder-name">${escapeHtml(folder.name || 'Map')}</span>
+                    <span class="folder-chevron">${expanded ? 'â–¾' : 'â–¸'}</span>
+                    <span class="folder-name">${escapeHtml(folder.name || 'Folder')}</span>
                     <span class="folder-actions">
-                        <button class="icon-btn folder-rename" data-folder-id="${folder.id}" title="Naam wijzigen">✎</button>
-                        <button class="icon-btn folder-delete" data-folder-id="${folder.id}" title="Map verwijderen">🗑</button>
+                        <button class="icon-btn folder-rename" data-folder-id="${folder.id}" title="Rename">âœŽ</button>
+                        <button class="icon-btn folder-delete" data-folder-id="${folder.id}" title="Delete folder">ðŸ—‘</button>
                     </span>
                 </div>
-                ${expanded ? `<div class="folder-items">${notes.length ? notes.map(noteItemHtml).join('') : '<div class="folder-empty">Leeg</div>'}</div>` : ''}
+                ${expanded ? `<div class="folder-items">${notes.length ? notes.map(noteItemHtml).join('') : '<div class="folder-empty">Empty</div>'}</div>` : ''}
             `;
             treeEl.appendChild(group);
         });
@@ -222,8 +224,8 @@
             group.className = 'folder';
             group.innerHTML = `
                 <div class="folder-header" data-folder-id="__none">
-                    <span class="folder-chevron">${expanded ? '▾' : '▸'}</span>
-                    <span class="folder-name">Geen map</span>
+                    <span class="folder-chevron">${expanded ? 'â–¾' : 'â–¸'}</span>
+                    <span class="folder-name">No folder</span>
                 </div>
                 ${expanded ? `<div class="folder-items">${unfiled.map(noteItemHtml).join('')}</div>` : ''}
             `;
@@ -292,7 +294,33 @@
         }
     });
 
-    /* ---------------- notities ---------------- */
+    treeEl.addEventListener('dragover', (e) => {
+        const header = e.target.closest('.folder-header');
+        if (!header) return;
+        if (!draggedTreeNoteId && !e.dataTransfer.types.includes('text/plain')) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        header.classList.add('drag-over');
+    });
+    treeEl.addEventListener('dragleave', (e) => {
+        const header = e.target.closest('.folder-header');
+        if (header && !header.contains(e.relatedTarget)) header.classList.remove('drag-over');
+    });
+    treeEl.addEventListener('drop', (e) => {
+        const header = e.target.closest('.folder-header');
+        if (!header) return;
+        e.preventDefault();
+        header.classList.remove('drag-over');
+        const note = noteById(e.dataTransfer.getData('text/plain') || draggedTreeNoteId);
+        if (!note) return;
+        note.folderId = header.dataset.folderId === '__none' ? null : header.dataset.folderId;
+        state.currentFolderId = note.folderId;
+        touch(note);
+        renderTree();
+        renderEditor();
+    });
+
+    /* ---------------- notes ---------------- */
 
     function selectNote(id) {
         flushEditor();
@@ -332,7 +360,7 @@
     function deleteNote() {
         const note = noteById(state.currentNoteId);
         if (!note) return;
-        if (!confirm(`Notitie "${note.title.trim() || 'Naamloos'}" verwijderen?`)) return;
+        if (!confirm(`Note "${note.title.trim() || 'Untitled'}" delete?`)) return;
         state.notes = state.notes.filter((n) => n.id !== note.id);
         delete state.alarms[note.id];
         saveNotes();
@@ -343,10 +371,19 @@
     }
 
     function folderOptions(selected) {
-        return '<option value="">Geen map</option>' + state.folders.map((f) =>
+        return '<option value="">No folder</option>' + state.folders.map((f) =>
             `<option value="${f.id}" ${f.id === selected ? 'selected' : ''}>${escapeHtml(f.name)}</option>`
         ).join('');
     }
+
+    $('noteFolder').addEventListener('change', () => {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        note.folderId = $('noteFolder').value || null;
+        state.currentFolderId = note.folderId;
+        touch(note);
+        renderTree();
+    });
 
     function renderEditor() {
         const note = noteById(state.currentNoteId);
@@ -357,10 +394,10 @@
         $('saveNoteBtn').disabled = empty;
         $('deleteNoteBtn').disabled = empty;
         $('noteFolder').disabled = empty;
-        $('noteTitle').placeholder = empty ? 'Geen notitie geselecteerd' : 'Titel';
+        $('noteTitle').placeholder = empty ? 'No note selected' : 'Title';
         $('noteContent').placeholder = empty
-            ? 'Maak een nieuwe notitie om te beginnen.'
-            : 'Schrijf je notitie hier...';
+            ? 'Create a note to get started.'
+            : 'Write your note here...';
 
         if (empty) {
             $('noteTitle').value = '';
@@ -416,26 +453,18 @@
 
     $('saveNoteBtn').addEventListener('click', () => {
         flushEditor();
-        toast('Notitie opgeslagen');
+        toast('Note saved');
     });
 
     $('deleteNoteBtn').addEventListener('click', deleteNote);
 
-    $('noteFolder').addEventListener('change', () => {
-        const note = noteById(state.currentNoteId);
-        if (!note) return;
-        note.folderId = $('noteFolder').value || null;
-        state.currentFolderId = note.folderId;
-        touch(note);
-        renderTree();
-    });
 
     $('newNoteBtn').addEventListener('click', newNote);
 
-    /* ---------------- mappen ---------------- */
+    /* ---------------- folders ---------------- */
 
     $('newFolderBtn').addEventListener('click', () => {
-        const name = prompt('Naam van de nieuwe map:', 'Nieuwe map');
+        const name = prompt('New folder name:', 'New folder');
         if (!name || !name.trim()) return;
         const folder = { id: uid(), name: name.trim() };
         state.folders.push(folder);
@@ -443,12 +472,13 @@
         saveFolders();
         savePrefs();
         renderTree();
+        if (state.currentNoteId) $('noteFolder').innerHTML = folderOptions(noteById(state.currentNoteId)?.folderId);
     });
 
     function renameFolder(id) {
         const folder = state.folders.find((f) => f.id === id);
         if (!folder) return;
-        const name = prompt('Nieuwe naam:', folder.name);
+        const name = prompt('New name:', folder.name);
         if (!name || !name.trim()) return;
         folder.name = name.trim();
         saveFolders();
@@ -461,7 +491,7 @@
     function deleteFolder(id) {
         const folder = state.folders.find((f) => f.id === id);
         if (!folder) return;
-        if (!confirm(`Map "${folder.name}" verwijderen? De notities blijven bestaan en komen onder "Geen map".`)) return;
+        if (!confirm(`Delete folder "${folder.name}"? Notes will be moved to "No folder".`)) return;
         state.folders = state.folders.filter((f) => f.id !== id);
         state.notes.forEach((n) => { if (n.folderId === id) n.folderId = null; });
         state.prefs.expandedFolders = state.prefs.expandedFolders.filter((f) => f !== id);
@@ -478,7 +508,7 @@
     function applyScheduleCollapse() {
         const collapsed = state.prefs.scheduleCollapsed;
         $('scheduleBody').style.display = collapsed ? 'none' : 'flex';
-        $('scheduleChevron').textContent = collapsed ? '▸' : '▾';
+        $('scheduleChevron').textContent = collapsed ? 'â–¸' : 'â–¾';
     }
 
     $('scheduleHeader').addEventListener('click', (e) => {
@@ -589,7 +619,7 @@
     $('tabNote').addEventListener('click', () => setTab('note'));
     $('tabCalendar').addEventListener('click', () => setTab('calendar'));
 
-    /* ---------------- agenda ---------------- */
+    /* ---------------- calendar ---------------- */
 
     $('calendarWeekdays').innerHTML = WEEKDAYS
         .map((d) => `<div class="calendar-weekday">${d}</div>`).join('');
@@ -621,7 +651,7 @@
             cell.dataset.date = `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
             cell.innerHTML = `<div class="calendar-day-number">${day.getDate()}</div>` +
                 (scheduled.length
-                    ? `<div class="calendar-count">${scheduled.length} ${scheduled.length === 1 ? 'notitie' : 'notities'}</div><div class="calendar-dot"></div>`
+                    ? `<div class="calendar-count">${scheduled.length} ${scheduled.length === 1 ? 'note' : 'notes'}</div><div class="calendar-dot"></div>`
                     : '');
             grid.appendChild(cell);
         }
@@ -633,7 +663,7 @@
         const host = $('calendarDayNotes');
         const day = state.calendarDay;
         if (!day) {
-            host.innerHTML = '<div class="calendar-hint">Klik op een dag om de geplande notities te zien.</div>';
+            host.innerHTML = '<div class="calendar-hint">Click a day to view scheduled notes.</div>';
             return;
         }
         const notes = state.notes
@@ -642,10 +672,10 @@
         const label = `${day.getDate()} ${MONTHS[day.getMonth()]} ${day.getFullYear()}`;
         host.innerHTML = `<div class="calendar-day-title">${label}</div>` + (notes.length
             ? notes.map((n) => `<div class="calendar-note-item" data-note-id="${n.id}">
-                    <div>${escapeHtml(n.title.trim() || 'Naamloos')}</div>
-                    <div class="calendar-note-time">${formatTime(n.scheduledAt)}${n.alarmEnabled ? ' · alarm' : ''}</div>
+                    <div>${escapeHtml(n.title.trim() || 'Untitled')}</div>
+                    <div class="calendar-note-time">${formatTime(n.scheduledAt)}${n.alarmEnabled ? ' - alarm' : ''}</div>
                 </div>`).join('')
-            : '<div class="calendar-hint">Geen notities gepland op deze dag.</div>');
+            : '<div class="calendar-hint">No notes scheduled for this day.</div>');
     }
 
     $('calendarGrid').addEventListener('click', (e) => {
@@ -698,11 +728,20 @@
     const planCancel = $('planFromTreeCancel');
     let pendingPlan = null;
 
+    $('weekdayOptions').innerHTML = WEEKDAYS.map((day, index) =>
+        `<label><input type="checkbox" value="${index}"> ${['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][index]}</label>`
+    ).join('');
+    $('advancedSettingsToggle').addEventListener('click', () => {
+        const panel = $('advancedSettings');
+        panel.hidden = !panel.hidden;
+        $('advancedSettingsToggle').setAttribute('aria-expanded', String(!panel.hidden));
+    });
+
     function openPlanFromTreeModal(noteId, day) {
         const note = noteById(noteId);
         if (!note) return;
         pendingPlan = { noteId, day: new Date(day.getFullYear(), day.getMonth(), day.getDate()) };
-        $('planFromTreeNoteTitle').textContent = note.title.trim() || 'Naamloos';
+        $('planFromTreeNoteTitle').textContent = note.title.trim() || 'Untitled';
         const existing = parseDate(note.scheduledAt);
         let timeStr = '09:00:00';
         if (existing && sameDay(existing, day)) {
@@ -717,6 +756,12 @@
         $('planFromTreeSnooze').value = note.alarmSnoozeMinutes || 5;
         $('planFromTreeRepeatLabel').textContent = $('planFromTreeRepeat').value;
         $('planFromTreeSnoozeLabel').textContent = $('planFromTreeSnooze').value;
+        $('advancedSettings').hidden = true;
+        $('advancedSettingsToggle').setAttribute('aria-expanded', 'false');
+        $('weekdayOptions').querySelectorAll('input').forEach((input) => {
+            input.checked = (note.repeatWeekdays || []).includes(Number(input.value));
+        });
+        $('repeatEndDate').value = note.repeatEndDate || '';
         planModal.classList.add('active');
     }
 
@@ -752,6 +797,8 @@
         note.alarmEnabled = $('planFromTreeAlarm').checked;
         note.alarmRepeatCount = Number($('planFromTreeRepeat').value);
         note.alarmSnoozeMinutes = Number($('planFromTreeSnooze').value);
+        note.repeatWeekdays = [...$('weekdayOptions').querySelectorAll('input:checked')].map((el) => Number(el.value));
+        note.repeatEndDate = $('repeatEndDate').value;
         if (!note.alarmEnabled || !note.scheduledAt) delete state.alarms[note.id];
         else delete state.alarms[note.id];
         saveAlarms();
@@ -762,7 +809,7 @@
             renderCalendar();
         }
         closePlanFromTreeModal();
-        toast('Notitie ingepland');
+        toast('Note scheduled');
     });
 
     $('calPrev').addEventListener('click', () => {
@@ -927,7 +974,7 @@
 
     $('toolClear').addEventListener('click', () => {
         if (!state.draw.strokes.length) return;
-        if (!confirm('De hele tekening wissen?')) return;
+        if (!confirm('Clear the entire drawing?')) return;
         state.draw.strokes = [];
         renderStrokes();
         flushEditor();
@@ -960,7 +1007,8 @@
     /* ---------------- kleuren ---------------- */
 
     function buildPalette(host, onPick) {
-        host.innerHTML = '';
+        const persistentToast = host.querySelector('.toast[data-persistent="true"]');
+        if (!persistentToast) host.innerHTML = '';
         PALETTE.forEach((color) => {
             const b = document.createElement('button');
             b.className = 'palette-color';
@@ -1033,10 +1081,13 @@
         app.classList.toggle('sidebar-right', state.prefs.sidebarSide === 'right');
         const collapsed = state.prefs.sidebarCollapsed && !isMobile();
         app.classList.toggle('sidebar-collapsed', collapsed);
+        $('toggleSidebarMain').title = isMobile() ? 'Open sidebar' : 'Move sidebar left or right';
+        $('toggleSidebarSide').title = isMobile() ? 'Close sidebar' : 'Move sidebar left or right';
         $('expandSidebar').style.display = collapsed ? 'block' : 'none';
         $('expandSidebar').style.left = state.prefs.sidebarSide === 'right' ? 'auto' : '8px';
         $('expandSidebar').style.right = state.prefs.sidebarSide === 'right' ? '8px' : 'auto';
-        $('expandSidebar').textContent = state.prefs.sidebarSide === 'right' ? '«' : '»';
+        $('expandSidebar').textContent = String.fromCharCode(state.prefs.sidebarSide === 'right' ? 8249 : 8250);
+        $('collapseSidebar').textContent = String.fromCharCode(state.prefs.sidebarSide === 'right' ? 8250 : 8249);
     }
 
     function toggleSidebarSide() {
@@ -1050,7 +1101,10 @@
     }
 
     $('toggleSidebarSide').addEventListener('click', toggleSidebarSide);
-    $('toggleSidebarMain').addEventListener('click', toggleSidebarSide);
+    $('toggleSidebarMain').addEventListener('click', () => {
+        if (isMobile()) app.classList.toggle('mobile-open');
+        else toggleSidebarSide();
+    });
 
     $('collapseSidebar').addEventListener('click', () => {
         if (isMobile()) {
@@ -1113,7 +1167,7 @@
         if (!el) return;
         el.textContent = message || (githubConfigured()
             ? `GitHub: ${githubConfig.owner}/${githubConfig.repo}/${githubConfig.path}`
-            : 'GitHub: niet ingesteld');
+            : 'GitHub: not configured');
     }
 
     function showGithubSettings() {
@@ -1183,7 +1237,7 @@
         githubConfig.sha = result.content.sha;
         githubConfig.baseline = githubData();
         writeJSON(STORAGE.github, githubConfig);
-        updateGithubStatus('GitHub: gesynchroniseerd');
+        updateGithubStatus('GitHub: synced');
     }
 
     function useRemoteData(data) {
@@ -1196,7 +1250,7 @@
     async function syncGithub(options = {}) {
         if (!githubConfigured() || githubBusy) return;
         githubBusy = true;
-        updateGithubStatus('GitHub: synchroniseren…');
+        updateGithubStatus('GitHub: syncingâ€¦');
         try {
             if (options.flush !== false) flushEditor();
             let remote = await githubRequest('GET');
@@ -1204,14 +1258,14 @@
 
             if (!remote) {
                 await writeGithubData(null);
-                toast('Notities geüpload naar GitHub');
+                toast('Notes uploaded to GitHub');
                 return;
             }
 
             const remoteText = decodeGithubFile(remote.content);
             const remoteData = JSON.parse(remoteText);
             const remoteNotes = Array.isArray(remoteData) ? remoteData : remoteData.notes;
-            if (!Array.isArray(remoteNotes)) throw new Error('notes.json bevat geen geldige notitielijst');
+            if (!Array.isArray(remoteNotes)) throw new Error('notes.json does not contain a valid note list');
             const remoteComparable = JSON.stringify({ folders: Array.isArray(remoteData) ? [] : (remoteData.folders || []), notes: remoteNotes });
 
             if (!githubConfig.sha) {
@@ -1223,15 +1277,15 @@
                     useRemoteData(remoteData);
                     githubConfig.sha = remote.sha;
                     writeJSON(STORAGE.github, githubConfig);
-                } else if (confirm('Er staan al notities in GitHub. OK = deze browsernotities uploaden en de GitHub-versie vervangen. Annuleren = de GitHub-versie op dit apparaat laden.')) {
+                } else if (confirm('GitHub already contains notes. OK uploads and replaces them with this browser version. Cancel loads the GitHub version on this device.')) {
                     await writeGithubData(remote.sha);
-                    toast('Lokale notities geüpload naar GitHub');
+                    toast('Local notes uploaded to GitHub');
                     return;
                 } else {
                     useRemoteData(remoteData);
                     githubConfig.sha = remote.sha;
                     writeJSON(STORAGE.github, githubConfig);
-                    toast('Notities van GitHub geladen');
+                    toast('Notes loaded from GitHub');
                     return;
                 }
             } else if (remote.sha === githubConfig.sha) {
@@ -1245,14 +1299,14 @@
                     githubConfig.baseline = local;
                     writeJSON(STORAGE.github, githubConfig);
                 } else if (localChanged && remoteChanged) {
-                    const keepLocal = confirm('Er is een sync-conflict: deze browser en GitHub zijn allebei gewijzigd. OK = deze browserversie behouden. Annuleren = GitHub-versie laden.');
+                    const keepLocal = confirm('Sync conflict: both this browser and GitHub changed. OK keeps this browser version. Cancel loads the GitHub version.');
                     if (keepLocal) await writeGithubData(remote.sha);
                     else {
                         useRemoteData(remoteData);
                         githubConfig.sha = remote.sha;
                         writeJSON(STORAGE.github, githubConfig);
                     }
-                    toast('Sync-conflict opgelost');
+                    toast('Sync conflict resolved');
                     return;
                 } else if (localChanged) {
                     await writeGithubData(remote.sha);
@@ -1263,12 +1317,12 @@
                     writeJSON(STORAGE.github, githubConfig);
                 }
             }
-            updateGithubStatus('GitHub: gesynchroniseerd');
-            if (!options.silent) toast('GitHub-sync voltooid');
+            updateGithubStatus('GitHub: synced');
+            if (!options.silent) toast('GitHub sync complete');
         } catch (err) {
-            console.error('GitHub-sync mislukt', err);
-            updateGithubStatus('GitHub: sync mislukt');
-            toast(`GitHub-sync mislukt: ${err.message}`);
+            console.error('GitHub sync failed', err);
+            updateGithubStatus('GitHub: sync failed');
+            toast(`GitHub sync failed: ${err.message}`);
         } finally {
             githubBusy = false;
         }
@@ -1286,14 +1340,14 @@
     $('githubSaveBtn').addEventListener('click', () => {
         const next = readGithubForm();
         if (!next.owner || !next.repo || !next.path || !next.token) {
-            toast('Vul owner, repo, pad en token in');
+            toast('Enter owner, repository, path, and token');
             return;
         }
         githubConfig = next;
         writeJSON(STORAGE.github, githubConfig);
         updateGithubStatus();
         closeModals();
-        toast('GitHub-instellingen opgeslagen');
+        toast('GitHub settings saved');
     });
     $('githubClearBtn').addEventListener('click', () => {
         githubConfig = {};
@@ -1304,14 +1358,14 @@
         $('ghToken').value = '';
         $('ghAutoSync').checked = false;
         updateGithubStatus();
-        toast('GitHub-instellingen gewist uit deze browser');
+        toast('GitHub settings cleared from this browser');
     });
     $('githubTestBtn').addEventListener('click', async () => {
         const prior = githubConfig;
         githubConfig = readGithubForm();
         if (!githubConfigured()) {
             githubConfig = prior;
-            toast('Vul eerst owner, repo, pad en token in');
+            toast('Enter owner, repository, path, and token first');
             return;
         }
         try {
@@ -1323,12 +1377,12 @@
                 }
             });
             if (!repoResponse.ok) throw new Error(repoResponse.status === 404
-                ? 'Repo niet gevonden of token heeft geen toegang'
+                ? 'Repository not found or token has no access'
                 : `GitHub gaf fout ${repoResponse.status}`);
             await githubRequest('GET');
-            toast('Verbinding met GitHub werkt');
+            toast('GitHub connection works');
         } catch (err) {
-            toast(`Verbinding mislukt: ${err.message}`);
+            toast(`Connection failed: ${err.message}`);
         } finally {
             githubConfig = prior;
         }
@@ -1364,9 +1418,9 @@
                 const data = JSON.parse(reader.result);
                 const notes = Array.isArray(data) ? data : data.notes;
                 const folders = Array.isArray(data) ? [] : (data.folders || []);
-                if (!Array.isArray(notes)) throw new Error('geen notities gevonden');
+                if (!Array.isArray(notes)) throw new Error('No notes found');
 
-                if (!confirm('Hiermee worden je huidige notities en mappen vervangen. Doorgaan?')) return;
+                if (!confirm('This replaces your current notes and folders. Continue?')) return;
 
                 state.notes = notes.map((n) => { migrateNote(n); return n; });
                 state.folders = Array.isArray(folders) ? folders : [];
@@ -1379,9 +1433,9 @@
                 savePrefs();
                 renderTree();
                 renderEditor();
-                toast('Back-up geïmporteerd');
+                toast('Backup imported');
             } catch (err) {
-                alert('Dit bestand kon niet gelezen worden: ' + err.message);
+                alert('Could not read this file: ' + err.message);
             }
         };
         reader.readAsText(file);
@@ -1437,16 +1491,65 @@
     }
 
     function showAlarm(note, runtime) {
-        const title = note.title.trim() || 'Naamloos';
-        const body = note.content.trim().slice(0, 120) || 'Geplande notitie';
+        const title = note.title.trim() || 'Untitled';
+        const body = note.content.trim().slice(0, 120) || 'Scheduled note';
         notify(title, body);
-        toast(`⏰ ${title} — ${formatTime(note.scheduledAt)}`, {
-            label: `Snooze ${runtime.snoozeMinutes} min`,
+        playAlarmSound();
+        toast(`Alarm: ${title} - ${formatTime(note.scheduledAt)}`, {
+            label: 'Stop alarm',
+            persistent: true,
             onClick: () => {
-                runtime.nextAt = Date.now() + runtime.snoozeMinutes * 60000;
+                stopAlarmSound();
+                runtime.nextAt = null;
+                runtime.repeatsLeft = 0;
                 saveAlarms();
+                if (note.repeatWeekdays && note.repeatWeekdays.length) {
+                    const next = nextWeekdayOccurrence(note, Date.now());
+                    if (next) { note.scheduledAt = toLocalIso(next); delete state.alarms[note.id]; touch(note); saveAlarms(); }
+                }
             }
         });
+    }
+
+    let alarmAudio = null, alarmContext = null, alarmOscillator = null;
+    function stopAlarmSound() {
+        if (alarmAudio) { alarmAudio.pause(); alarmAudio.currentTime = 0; alarmAudio = null; }
+        if (alarmOscillator) { try { alarmOscillator.stop(); } catch (_) {} alarmOscillator = null; }
+    }
+    function playAlarmSound() {
+        stopAlarmSound();
+        const saved = localStorage.getItem('remindate.alarmSound.v1');
+        if (saved) { alarmAudio = new Audio(saved); alarmAudio.loop = true; alarmAudio.play().catch(() => {}); return; }
+        try {
+            alarmContext = alarmContext || new (window.AudioContext || window.webkitAudioContext)();
+            if (alarmContext.state === 'suspended') alarmContext.resume();
+            const osc = alarmContext.createOscillator(), gain = alarmContext.createGain();
+            osc.type = 'sine'; osc.frequency.value = 880; gain.gain.value = 0.12;
+            osc.connect(gain); gain.connect(alarmContext.destination); osc.start(); alarmOscillator = osc;
+        } catch (_) {}
+    }
+    $('alarmSoundFile').addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0]; if (!file) return;
+        const reader = new FileReader();
+        reader.onload = () => { try { localStorage.setItem('remindate.alarmSound.v1', reader.result); toast('Custom alarm sound saved'); } catch (_) { toast('This sound file is too large to store in browser storage'); } };
+        reader.readAsDataURL(file);
+    });
+    $('standardAlarmSoundBtn').addEventListener('click', () => {
+        localStorage.removeItem('remindate.alarmSound.v1');
+        $('alarmSoundFile').value = '';
+        toast('Standard alarm sound selected');
+    });
+    function nextWeekdayOccurrence(note, afterTime) {
+        const base = parseDate(note.scheduledAt); if (!base) return null;
+        const weekdays = new Set(note.repeatWeekdays || []);
+        for (let offset = 1; offset <= 3660; offset++) {
+            const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + offset, base.getHours(), base.getMinutes(), base.getSeconds());
+            const dayIndex = (d.getDay() + 6) % 7;
+            const key = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+            if (note.repeatEndDate && key > note.repeatEndDate) return null;
+            if (weekdays.has(dayIndex) && d.getTime() > afterTime) return d;
+        }
+        return null;
     }
 
     function notify(title, body) {
@@ -1455,7 +1558,7 @@
             try {
                 new Notification(title, { body, icon: 'icon.svg' });
             } catch (err) {
-                console.warn('Melding kon niet getoond worden', err);
+                console.warn('Could not show notification', err);
             }
         } else if (Notification.permission !== 'denied') {
             Notification.requestPermission();
@@ -1477,6 +1580,7 @@
 
         const el = document.createElement('div');
         el.className = 'toast';
+        if (action?.persistent) el.dataset.persistent = 'true';
         const text = document.createElement('span');
         text.textContent = message;
         el.appendChild(text);
@@ -1494,7 +1598,7 @@
 
         host.appendChild(el);
         clearTimeout(toastTimer);
-        toastTimer = setTimeout(() => el.remove(), action ? 20000 : 3500);
+        if (!action?.persistent) toastTimer = setTimeout(() => el.remove(), action ? 20000 : 3500);
     }
 
     /* ---------------- sneltoetsen ---------------- */
@@ -1503,7 +1607,7 @@
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
             e.preventDefault();
             flushEditor();
-            toast('Notitie opgeslagen');
+            toast('Note saved');
         }
         if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'n') {
             e.preventDefault();
@@ -1540,9 +1644,9 @@
         const el = $('syncStatus');
         if (!el) return;
         if (fileSync.enabled && fileSync.handle) {
-            el.textContent = `Gekoppeld aan notes.json • Automatisch opslaan • ${fileSync.handle.name || ''}`;
+            el.textContent = `Linked to notes.json â€¢ Auto-save â€¢ ${fileSync.handle.name || ''}`;
         } else {
-            el.textContent = 'Geen bestand gekoppeld • Alleen localStorage • Gebruik "Kies notes.json" of export/import';
+            el.textContent = 'No file linked â€¢ Local storage only â€¢ Use "Choose notes.json" or export/import';
         }
     }
 
@@ -1559,7 +1663,7 @@
     function applyNotesPayload(data) {
         const notes = Array.isArray(data) ? data : data.notes;
         const folders = Array.isArray(data) ? [] : (data.folders || []);
-        if (!Array.isArray(notes)) throw new Error('Geen notities gevonden in notes.json');
+        if (!Array.isArray(notes)) throw new Error('No notes found in notes.json');
         state.notes = notes.map((n) => { migrateNote(n); return n; });
         state.folders = Array.isArray(folders) ? folders : [];
         state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
@@ -1583,7 +1687,7 @@
             if (perm !== 'granted') {
                 const req = await fileSync.handle.requestPermission({ mode: 'readwrite' });
                 if (req !== 'granted') {
-                    toast('Geen schrijfrechten voor notes.json');
+                    toast('No write access to notes.json');
                     return;
                 }
             }
@@ -1593,8 +1697,8 @@
             await writable.write(JSON.stringify(buildNotesPayload(), null, 2));
             await writable.close();
         } catch (err) {
-            console.error('Schrijven naar notes.json mislukt', err);
-            toast('Kon niet naar notes.json schrijven');
+            console.error('Could not write to notes.json', err);
+            toast('Could not write to notes.json');
         }
     }
 
@@ -1607,8 +1711,8 @@
 
     async function pickNotesFile() {
         if (!('showOpenFilePicker' in window)) {
-            toast('File System Access API wordt niet ondersteund in deze browser');
-            alert('Kies notes.json werkt alleen in Chrome, Edge of Opera op desktop. Op Safari/iOS wordt dit niet ondersteund.');
+            toast('File System Access API is not supported in this browser');
+            alert('Choosing notes.json is supported in Chrome, Edge, or Opera on desktop. Safari and iOS do not support it.');
             return;
         }
         try {
@@ -1627,22 +1731,22 @@
             try {
                 const data = JSON.parse(text);
                 applyNotesPayload(data);
-                toast('notes.json geladen & gekoppeld');
+                toast('notes.json loaded and linked');
             } catch (err) {
                 console.error(err);
-                toast('notes.json kon niet worden gelezen');
+                toast('Could not read notes.json');
             }
             await writeToFileHandle();
         } catch (err) {
             if (err.name === 'AbortError') return;
             console.error(err);
-            toast('Kon notes.json niet openen');
+            toast('Could not open notes.json');
         }
     }
 
     async function loadFromSameDir() {
         if (!('showOpenFilePicker' in window)) {
-            toast('Niet ondersteund in deze browser');
+            toast('Not supported in this browser');
             return;
         }
         try {
@@ -1660,7 +1764,7 @@
             const file = await handle.getFile();
             const text = await file.text();
             applyNotesPayload(JSON.parse(text));
-            toast('notes.json geladen uit gekozen bestand');
+            toast('notes.json loaded from selected file');
             await writeToFileHandle();
         } catch (err) {
             if (err.name === 'AbortError') return;
@@ -1672,11 +1776,11 @@
     $('loadFromDirBtn').addEventListener('click', loadFromSameDir);
     $('saveToFileBtn').addEventListener('click', async () => {
         if (!fileSync.enabled) {
-            toast('Kies eerst notes.json met "Kies notes.json"');
+            toast('Choose notes.json first');
             return;
         }
         await writeToFileHandle();
-        toast('Opgeslagen naar notes.json');
+        toast('Saved to notes.json');
     });
 
     window.addEventListener('beforeunload', flushEditor);
