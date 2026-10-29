@@ -680,7 +680,7 @@ button:disabled {
     border-radius: 50%;
     border: 2px solid var(--border);
     cursor: pointer;
-    background: #222222;
+    background: #d1d5db;
     flex-shrink: 0;
 }
 
@@ -960,7 +960,7 @@ button:disabled {
 
 .palette {
     display: grid;
-    grid-template-columns: repeat(6, 1fr);
+    grid-template-columns: repeat(11, 1fr);
     gap: 6px;
 }
 

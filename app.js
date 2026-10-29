@@ -22,12 +22,20 @@
         enabled: false
     };
 
-    const PALETTE = [
-        '#000000', '#ffffff', '#f87171', '#fb923c', '#fbbf24', '#a3e635',
-        '#4ade80', '#2dd4bf', '#38bdf8', '#818cf8', '#a78bfa', '#f472b6',
-        '#7f1d1d', '#9a3412', '#854d0e', '#3f6212', '#14532d', '#134e4a',
-        '#0c4a6e', '#1e1b4b', '#4c1d95', '#831843', '#a8a29e', '#57534e'
+    // [color, name] in display order
+    const PALETTE_NAMED = [
+        ['#000000', 'Black'], ['#4b5563', 'Dark grey'], ['#d1d5db', 'Light grey'], ['#ffffff', 'White'],
+        ['#fca5a5', 'Light red'], ['#ef4444', 'Bright red'], ['#991b1b', 'Dark red'],
+        ['#fdba74', 'Light orange'], ['#f97316', 'Bright orange'], ['#c2410c', 'Dark orange'],
+        ['#facc15', 'Yellow'],
+        ['#86efac', 'Light green'], ['#22c55e', 'Bright green'], ['#166534', 'Dark green'],
+        ['#14b8a6', 'Turquoise'], ['#22d3ee', 'Cyan'],
+        ['#3b82f6', 'Blue'], ['#1e3a8a', 'Dark blue'],
+        ['#c4b5fd', 'Light purple'], ['#8b5cf6', 'Purple'], ['#d946ef', 'Magenta'], ['#6366f1', 'Blue-purple']
     ];
+    const PALETTE = PALETTE_NAMED.map(([c]) => c);
+    const DEFAULT_PEN_COLOR = '#d1d5db';   // light grey
+    const DEFAULT_CANVAS_BG = '#000000';   // black
 
     const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
         'July', 'August', 'September', 'October', 'November', 'December'];
@@ -59,7 +67,7 @@
         calendarDay: null,
         draw: {
             tool: 'pen',
-            color: '#222222',
+            color: DEFAULT_PEN_COLOR,
             size: 6,
             strokes: [],
             drawing: false,
@@ -136,7 +144,7 @@
         note.alarmSnoozeMinutes = Number(note.alarmSnoozeMinutes) || 5;
         note.repeatWeekdays = Array.isArray(note.repeatWeekdays) ? note.repeatWeekdays : [];
         note.repeatEndDate = note.repeatEndDate || '';
-        note.canvasBackground = note.canvasBackground || '#ffffff';
+        note.canvasBackground = note.canvasBackground || DEFAULT_CANVAS_BG;
         note.strokes = Array.isArray(note.strokes) ? note.strokes : [];
         note.skipDates = Array.isArray(note.skipDates) ? note.skipDates : [];
     }
@@ -630,7 +638,7 @@
             alarmSnoozeMinutes: 5,
             repeatWeekdays: [],
             repeatEndDate: '',
-            canvasBackground: '#ffffff',
+            canvasBackground: DEFAULT_CANVAS_BG,
             strokes: [],
             order: topOrder()
         };
@@ -1372,7 +1380,7 @@
         const note = noteById(state.currentNoteId);
         ctx.save();
         ctx.setTransform(1, 0, 0, 1, 0, 0);
-        ctx.fillStyle = note ? (note.canvasBackground || '#ffffff') : '#ffffff';
+        ctx.fillStyle = note ? (note.canvasBackground || DEFAULT_CANVAS_BG) : DEFAULT_CANVAS_BG;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.restore();
         state.draw.strokes.forEach(drawStroke);
@@ -1542,7 +1550,7 @@
             const b = document.createElement('button');
             b.className = 'palette-color';
             b.style.background = color;
-            b.title = color;
+            b.title = (PALETTE_NAMED.find(([c]) => c === color) || [, color])[1];
             b.addEventListener('click', () => {
                 onPick(color);
                 closeModals();
@@ -1638,7 +1646,7 @@
 
     $('toolCanvasBg').addEventListener('click', () => {
         const note = noteById(state.currentNoteId);
-        if (note) $('canvasBgCustom').value = note.canvasBackground || '#ffffff';
+        if (note) $('canvasBgCustom').value = note.canvasBackground || DEFAULT_CANVAS_BG;
         openModal('canvasBgModal');
     });
 
