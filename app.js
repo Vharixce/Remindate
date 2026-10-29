@@ -181,7 +181,11 @@
     const emptyEl = $('emptyExplorer');
 
     function sortedNotes(notes) {
-        return notes.slice().sort((a, b) => new Date(b.modifiedAt) - new Date(a.modifiedAt));
+        return notes.slice().sort((a, b) => {
+            const aTime = Date.parse(a.modifiedAt) || 0;
+            const bTime = Date.parse(b.modifiedAt) || 0;
+            return bTime - aTime;
+        });
     }
 
     function noteItemHtml(note) {
@@ -206,7 +210,7 @@
             group.className = 'folder';
             group.innerHTML = `
                 <div class="folder-header" data-folder-id="${folder.id}">
-                    <span class="folder-chevron">${expanded ? 'â–¾' : 'â–¸'}</span>
+                    <span class="folder-chevron">${expanded ? '&#9662;' : '&#9656;'}</span>
                     <span class="folder-name">${escapeHtml(folder.name || 'Folder')}</span>
                     <span class="folder-actions">
                         <button class="folder-action-btn folder-rename" data-folder-id="${folder.id}" title="Rename folder">Rename</button>
@@ -224,7 +228,7 @@
             group.className = 'folder';
             group.innerHTML = `
                 <div class="folder-header" data-folder-id="__none">
-                    <span class="folder-chevron">${expanded ? 'â–¾' : 'â–¸'}</span>
+                    <span class="folder-chevron">${expanded ? '&#9662;' : '&#9656;'}</span>
                     <span class="folder-name">No folder</span>
                 </div>
                 ${expanded ? `<div class="folder-items">${unfiled.map(noteItemHtml).join('')}</div>` : ''}
@@ -332,6 +336,7 @@
 
     function newNote() {
         flushEditor();
+        setTab('note');
         const now = new Date().toISOString();
         state.currentFolderId = null;
         state.draw.strokes = [];
@@ -359,7 +364,6 @@
         saveNotes();
         state.currentNoteId = note.id;
         renderTree();
-        setTab('note');
         renderEditor();
         $('noteTitle').focus();
         if (isMobile()) app.classList.remove('mobile-open');
@@ -443,14 +447,21 @@
         clearTimeout(editorTimer);
         const note = noteById(state.currentNoteId);
         if (!note) return;
-        note.title = $('noteTitle').value;
-        note.content = $('noteContent').value;
-        note.folderId = $('noteFolder').value || null;
-        note.strokes = state.draw.strokes.map((s) => ({
+        const title = $('noteTitle').value;
+        const content = $('noteContent').value;
+        const folderId = $('noteFolder').value || null;
+        const strokes = state.draw.strokes.map((s) => ({
             color: s.color,
             thicknessRatio: s.thicknessRatio,
             points: s.points.map((p) => ({ x: p.x, y: p.y }))
         }));
+        const changed = note.title !== title || note.content !== content || note.folderId !== folderId ||
+            JSON.stringify(note.strokes) !== JSON.stringify(strokes);
+        if (!changed) return;
+        note.title = title;
+        note.content = content;
+        note.folderId = folderId;
+        note.strokes = strokes;
         note.modifiedAt = new Date().toISOString();
         saveNotes();
         renderTree();
@@ -516,7 +527,7 @@
     function applyScheduleCollapse() {
         const collapsed = state.prefs.scheduleCollapsed;
         $('scheduleBody').style.display = collapsed ? 'none' : 'flex';
-        $('scheduleChevron').textContent = collapsed ? 'â–¸' : 'â–¾';
+        $('scheduleChevron').textContent = String.fromCharCode(collapsed ? 9656 : 9662);
     }
 
     $('scheduleHeader').addEventListener('click', (e) => {
