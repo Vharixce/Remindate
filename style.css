@@ -1186,8 +1186,14 @@ input[type="color"] {
 
 .advanced-settings { display:grid; gap:10px; padding:10px; border:1px solid var(--border); border-radius:8px; background:var(--card); }
 .advanced-settings[hidden] { display:none; }
-.weekday-options { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
-.weekday-options label { display:flex; align-items:center; gap:5px; font-size:12px; }
+.advanced-label { font-size:12px; color:var(--text-dim); }
+.weekday-options { display:flex; gap:6px; flex-wrap:wrap; }
+.weekday-chip { position:relative; cursor:pointer; }
+.weekday-chip input { position:absolute; opacity:0; width:0; height:0; }
+.weekday-chip span { display:flex; align-items:center; justify-content:center; width:30px; height:30px; border-radius:50%; border:1px solid var(--border); background:var(--panel); font-size:12px; font-weight:600; color:var(--text-dim); transition:background .12s, color .12s, border-color .12s; user-select:none; }
+.weekday-chip:hover span { border-color:var(--primary); }
+.weekday-chip input:checked + span { background:var(--primary); border-color:var(--primary); color:#fff; }
+.weekday-chip input:focus-visible + span { outline:2px solid var(--primary); outline-offset:2px; }
 .advanced-toggle { align-self:flex-start; }
 .github-help a { display:block; margin-top:8px; }
 .alarm-sound-modal { width:420px; }
@@ -1199,3 +1205,16 @@ input[type="color"] {
 .note-item.drop-before { box-shadow: inset 0 2px 0 var(--primary); }
 .note-item.drop-after { box-shadow: inset 0 -2px 0 var(--primary); }
 .settings-empty { color: var(--text-dim); font-size: 13px; }
+
+/* calendar note chips (draggable between days) */
+.calendar-chips { display:flex; flex-direction:column; gap:2px; margin-top:4px; }
+.calendar-chip { font-size:11px; line-height:1.3; padding:2px 5px; border-radius:4px; background:rgba(124,111,240,.22); color:var(--text); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; cursor:grab; }
+.calendar-chip.recurring { background:rgba(45,212,191,.2); }
+.calendar-chip:active { cursor:grabbing; }
+.calendar-more { font-size:10px; color:var(--text-dim); padding-left:2px; }
+.calendar-day .calendar-dot { display:none; }
+.calendar-note-item[draggable="true"] { cursor:grab; }
+@media (max-width: 760px) {
+    .calendar-chips { display:none; }
+    .calendar-day .calendar-dot { display:block; }
+}

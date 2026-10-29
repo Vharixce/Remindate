@@ -168,6 +168,74 @@
             a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
     }
 
+    function dayKey(d) {
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    }
+
+    function keyToDate(key) {
+        const [y, m, d] = key.split('-').map(Number);
+        return new Date(y, m - 1, d);
+    }
+
+    /* ---------------- recurrence ----------------
+     * scheduledAt = first occurrence (date + time).
+     * repeatWeekdays = [0..6] (0 = Monday) on which the note repeats,
+     * from the start date up to and including repeatEndDate (empty = no end).
+     */
+    function isRecurring(note) {
+        return Array.isArray(note.repeatWeekdays) && note.repeatWeekdays.length > 0;
+    }
+
+    // Returns the occurrence (Date with the note's time) on `day`, or null.
+    function occurrenceOn(note, day) {
+        const base = parseDate(note.scheduledAt);
+        if (!base) return null;
+        const occ = new Date(day.getFullYear(), day.getMonth(), day.getDate(),
+            base.getHours(), base.getMinutes(), base.getSeconds());
+        if (sameDay(base, day)) return occ;
+        if (!isRecurring(note)) return null;
+        const key = dayKey(day);
+        if (key < dayKey(base)) return null;
+        if (note.repeatEndDate && key > note.repeatEndDate) return null;
+        if (!note.repeatWeekdays.includes((day.getDay() + 6) % 7)) return null;
+        return occ;
+    }
+
+    // Most recent occurrence at or before `time` (ms).
+    function latestOccurrence(note, time) {
+        const base = parseDate(note.scheduledAt);
+        if (!base) return null;
+        if (!isRecurring(note)) return base.getTime() <= time ? base : null;
+        const now = new Date(time);
+        for (let i = 0; i < 8; i++) {
+            const occ = occurrenceOn(note, new Date(now.getFullYear(), now.getMonth(), now.getDate() - i));
+            if (occ && occ.getTime() <= time) return occ;
+        }
+        return null;
+    }
+
+    // First occurrence after `time` (ms).
+    function nextOccurrence(note, time) {
+        const base = parseDate(note.scheduledAt);
+        if (!base) return null;
+        if (!isRecurring(note)) return base.getTime() > time ? base : null;
+        const from = new Date(Math.max(time, base.getTime() - 1));
+        for (let i = 0; i < 400; i++) {
+            const occ = occurrenceOn(note, new Date(from.getFullYear(), from.getMonth(), from.getDate() + i));
+            if (occ && occ.getTime() > time) return occ;
+        }
+        return null;
+    }
+
+    const WEEKDAY_SHORT = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+    const WEEKDAY_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+    function repeatSummary(note) {
+        if (!isRecurring(note)) return '';
+        const days = note.repeatWeekdays.slice().sort().map((i) => WEEKDAY_FULL[i].slice(0, 2)).join(' ');
+        return `repeats ${days}${note.repeatEndDate ? ` until ${formatDateTime(note.repeatEndDate + 'T00:00:00').slice(0, -6)}` : ''}`;
+    }
+
     const noteById = (id) => state.notes.find((n) => n.id === id) || null;
 
     function touch(note) {
@@ -211,7 +279,13 @@
         const preview = note.content.trim()
             ? note.content.replace(/\s+/g, ' ').trim().slice(0, 60)
             : (note.strokes.length ? 'Drawing' : 'Empty note');
-        const meta = note.scheduledAt ? ` · ${formatDateTime(note.scheduledAt)}` : '';
+        let meta = '';
+        if (note.scheduledAt) {
+            const next = isRecurring(note) ? nextOccurrence(note, Date.now()) : null;
+            meta = isRecurring(note)
+                ? ` · ↻ ${next ? formatDateTime(toLocalIso(next)) : 'ended'}`
+                : ` · ${formatDateTime(note.scheduledAt)}`;
+        }
         return `<div class="note-item ${note.id === state.currentNoteId ? 'active' : ''}" data-note-id="${note.id}">
             <div class="note-item-title">${escapeHtml(note.title.trim() || 'Untitled')}</div>
             <div class="note-item-meta">${escapeHtml(preview)}${meta}</div>
@@ -653,8 +727,7 @@
         note.alarmEnabled = $('alarmEnabled').checked;
         note.alarmRepeatCount = Number($('repeatCount').value);
         note.alarmSnoozeMinutes = Number($('snoozeMinutes').value);
-        if (!note.alarmEnabled || !note.scheduledAt) delete state.alarms[note.id];
-        saveAlarms();
+        resetAlarmRuntime(note);
         touch(note);
         renderTree();
         if (state.prefs.activeTab === 'calendar') renderCalendar();
@@ -677,8 +750,9 @@
         if (!note) return;
         note.scheduledAt = null;
         note.alarmEnabled = false;
-        delete state.alarms[note.id];
-        saveAlarms();
+        note.repeatWeekdays = [];
+        note.repeatEndDate = '';
+        resetAlarmRuntime(note);
         touch(note);
         updateScheduleUi(note);
         renderTree();
@@ -723,22 +797,31 @@
         for (let i = 0; i < 42; i++) {
             const day = new Date(start.getFullYear(), start.getMonth(), start.getDate() + i);
             const inMonth = day.getMonth() === month;
-            const scheduled = state.notes.filter((n) => n.scheduledAt && sameDay(parseDate(n.scheduledAt), day));
+            const scheduled = notesOnDay(day);
             const isToday = sameDay(day, today);
             const isSelected = sameDay(day, state.calendarDay);
 
             const cell = document.createElement('div');
             cell.className = 'calendar-day' + (inMonth ? '' : ' other-month') +
                 (isToday ? ' today' : '') + (isSelected ? ' selected' : '');
-            cell.dataset.date = `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
+            cell.dataset.date = dayKey(day);
+            const chips = scheduled.slice(0, 2).map((n) =>
+                `<div class="calendar-chip${isRecurring(n) ? ' recurring' : ''}" draggable="true" data-note-id="${n.id}" title="${escapeHtml(n.title.trim() || 'Untitled')} – drag to another day">${escapeHtml(n.title.trim() || 'Untitled')}</div>`
+            ).join('');
             cell.innerHTML = `<div class="calendar-day-number">${day.getDate()}</div>` +
                 (scheduled.length
-                    ? `<div class="calendar-count">${scheduled.length} ${scheduled.length === 1 ? 'note' : 'notes'}</div><div class="calendar-dot"></div>`
+                    ? `<div class="calendar-chips">${chips}${scheduled.length > 2 ? `<div class="calendar-more">+${scheduled.length - 2} more</div>` : ''}</div><div class="calendar-dot"></div>`
                     : '');
             grid.appendChild(cell);
         }
 
         renderCalendarDay();
+    }
+
+    function notesOnDay(day) {
+        return state.notes
+            .filter((n) => occurrenceOn(n, day))
+            .sort((a, b) => occurrenceOn(a, day) - occurrenceOn(b, day));
     }
 
     function renderCalendarDay() {
@@ -748,14 +831,12 @@
             host.innerHTML = '<div class="calendar-hint">Click a day to view scheduled notes.</div>';
             return;
         }
-        const notes = state.notes
-            .filter((n) => n.scheduledAt && sameDay(parseDate(n.scheduledAt), day))
-            .sort((a, b) => new Date(a.scheduledAt) - new Date(b.scheduledAt));
+        const notes = notesOnDay(day);
         const label = `${day.getDate()} ${MONTHS[day.getMonth()]} ${day.getFullYear()}`;
         host.innerHTML = `<div class="calendar-day-title">${label}</div>` + (notes.length
-            ? notes.map((n) => `<div class="calendar-note-item" data-note-id="${n.id}">
+            ? notes.map((n) => `<div class="calendar-note-item" draggable="true" data-note-id="${n.id}" title="Click to open – drag to another day">
                     <div>${escapeHtml(n.title.trim() || 'Untitled')}</div>
-                    <div class="calendar-note-time">${formatTime(n.scheduledAt)}${n.alarmEnabled ? ' - alarm' : ''}</div>
+                    <div class="calendar-note-time">${formatTime(n.scheduledAt)}${n.alarmEnabled ? ' · alarm' : ''}${isRecurring(n) ? ' · ' + repeatSummary(n) : ''}</div>
                 </div>`).join('')
             : '<div class="calendar-hint">No notes scheduled for this day.</div>');
     }
@@ -767,6 +848,55 @@
         state.calendarDay = new Date(y, m - 1, d);
         renderCalendar();
     });
+
+    // Dragging a note that is already on the calendar (from a day cell or the day panel)
+    let draggedCalendarNote = null; // { noteId, fromKey }
+
+    function startCalendarDrag(e, noteId, fromKey) {
+        draggedCalendarNote = { noteId, fromKey };
+        e.dataTransfer.setData('text/plain', noteId);
+        e.dataTransfer.effectAllowed = 'move';
+    }
+
+    $('calendarGrid').addEventListener('dragstart', (e) => {
+        const chip = e.target.closest('.calendar-chip');
+        if (!chip) return;
+        startCalendarDrag(e, chip.dataset.noteId, chip.closest('.calendar-day').dataset.date);
+    });
+    $('calendarDayNotes').addEventListener('dragstart', (e) => {
+        const item = e.target.closest('.calendar-note-item');
+        if (!item || !state.calendarDay) return;
+        startCalendarDrag(e, item.dataset.noteId, dayKey(state.calendarDay));
+    });
+    document.addEventListener('dragend', () => {
+        draggedCalendarNote = null;
+        document.querySelectorAll('.calendar-day.drag-over').forEach((el) => el.classList.remove('drag-over'));
+    });
+
+    // Move a note from one day to another, keeping its time. For a repeating
+    // note the whole series (start date and end date) shifts by the same number of days.
+    function moveNoteToDay(noteId, fromKey, toKey) {
+        const note = noteById(noteId);
+        const base = note && parseDate(note.scheduledAt);
+        if (!base || fromKey === toKey) return;
+        const from = keyToDate(fromKey), to = keyToDate(toKey);
+        const diff = Math.round((Date.UTC(to.getFullYear(), to.getMonth(), to.getDate()) -
+            Date.UTC(from.getFullYear(), from.getMonth(), from.getDate())) / 86400000);
+        const moved = new Date(base.getFullYear(), base.getMonth(), base.getDate() + diff,
+            base.getHours(), base.getMinutes(), base.getSeconds());
+        note.scheduledAt = toLocalIso(moved);
+        if (note.repeatEndDate) {
+            const end = keyToDate(note.repeatEndDate);
+            note.repeatEndDate = dayKey(new Date(end.getFullYear(), end.getMonth(), end.getDate() + diff));
+        }
+        resetAlarmRuntime(note);
+        touch(note);
+        state.calendarDay = to;
+        renderTree();
+        renderCalendar();
+        if (note.id === state.currentNoteId) updateScheduleUi(note);
+        toast(`Moved to ${to.getDate()} ${MONTHS[to.getMonth()]}`);
+    }
 
     $('calendarGrid').addEventListener('dragover', (e) => {
         const cell = e.target.closest('.calendar-day');
@@ -790,10 +920,15 @@
         if (!cell) return;
         e.preventDefault();
         cell.classList.remove('drag-over');
+        if (draggedCalendarNote) {
+            const { noteId, fromKey } = draggedCalendarNote;
+            draggedCalendarNote = null;
+            moveNoteToDay(noteId, fromKey, cell.dataset.date);
+            return;
+        }
         const noteId = e.dataTransfer.getData('text/plain') || draggedTreeNoteId;
         if (!noteId) return;
-        const [y, m, d] = cell.dataset.date.split('-').map(Number);
-        openPlanFromTreeModal(noteId, new Date(y, m - 1, d));
+        openPlanFromTreeModal(noteId, keyToDate(cell.dataset.date));
         draggedTreeNoteId = null;
     });
 
@@ -810,8 +945,8 @@
     const planCancel = $('planFromTreeCancel');
     let pendingPlan = null;
 
-    $('weekdayOptions').innerHTML = WEEKDAYS.map((day, index) =>
-        `<label><input type="checkbox" value="${index}"> ${['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday'][index]}</label>`
+    $('weekdayOptions').innerHTML = WEEKDAY_SHORT.map((letter, index) =>
+        `<label class="weekday-chip" title="${WEEKDAY_FULL[index]}"><input type="checkbox" value="${index}" aria-label="${WEEKDAY_FULL[index]}"><span>${letter}</span></label>`
     ).join('');
     $('advancedSettingsToggle').addEventListener('click', () => {
         const panel = $('advancedSettings');
@@ -838,8 +973,8 @@
         $('planFromTreeSnooze').value = note.alarmSnoozeMinutes || 5;
         $('planFromTreeRepeatLabel').textContent = $('planFromTreeRepeat').value;
         $('planFromTreeSnoozeLabel').textContent = $('planFromTreeSnooze').value;
-        $('advancedSettings').hidden = true;
-        $('advancedSettingsToggle').setAttribute('aria-expanded', 'false');
+        $('advancedSettings').hidden = !isRecurring(note);
+        $('advancedSettingsToggle').setAttribute('aria-expanded', String(isRecurring(note)));
         $('weekdayOptions').querySelectorAll('input').forEach((input) => {
             input.checked = (note.repeatWeekdays || []).includes(Number(input.value));
         });
@@ -869,6 +1004,11 @@
         if (!note) return;
         const date = $('planFromTreeDate').value;
         const time = $('planFromTreeTime').value || '00:00:00';
+        const endDate = $('repeatEndDate').value;
+        if (endDate && date && endDate < date) {
+            toast('End date is before the start date');
+            return;
+        }
         if (date) {
             const parts = time.split(':');
             const dt = new Date(`${date}T${pad(parts[0] || 0)}:${pad(parts[1] || 0)}:${pad(parts[2] || 0)}`);
@@ -881,9 +1021,7 @@
         note.alarmSnoozeMinutes = Number($('planFromTreeSnooze').value);
         note.repeatWeekdays = [...$('weekdayOptions').querySelectorAll('input:checked')].map((el) => Number(el.value));
         note.repeatEndDate = $('repeatEndDate').value;
-        if (!note.alarmEnabled || !note.scheduledAt) delete state.alarms[note.id];
-        else delete state.alarms[note.id];
-        saveAlarms();
+        resetAlarmRuntime(note);
         touch(note);
         renderTree();
         if (state.prefs.activeTab === 'calendar') {
@@ -1537,33 +1675,50 @@
 
     /* ---------------- alarmen ---------------- */
 
+    // An alarm only rings if its time was at most this long ago. Older (missed)
+    // alarms, e.g. when the app was closed or after a sync, are skipped silently.
+    const ALARM_GRACE_MS = 10 * 60000;
+    const ALARM_MAX_SOUND_MS = 20000;
+
+    // Mark the most recent (already passed) occurrence as handled, so changing a
+    // note's schedule never makes it ring immediately for a time in the past.
+    function resetAlarmRuntime(note) {
+        delete state.alarms[note.id];
+        const occ = note.alarmEnabled ? latestOccurrence(note, Date.now()) : null;
+        if (occ) state.alarms[note.id] = { dueTime: occ.getTime(), repeatsLeft: 0, snoozeMinutes: note.alarmSnoozeMinutes, nextAt: null };
+        saveAlarms();
+    }
+
     function checkAlarms() {
         const now = Date.now();
+        // Re-read so several open tabs don't ring the same alarm twice
+        state.alarms = readJSON(STORAGE.alarms, {}) || {};
         let changed = false;
+
+        Object.keys(state.alarms).forEach((id) => {
+            const n = noteById(id);
+            if (!n || !n.alarmEnabled || !n.scheduledAt) { delete state.alarms[id]; changed = true; }
+        });
 
         state.notes.forEach((note) => {
             if (!note.alarmEnabled || !note.scheduledAt) return;
-            const due = parseDate(note.scheduledAt);
-            if (!due) return;
-            const dueTime = due.getTime();
+            const occ = latestOccurrence(note, now);
+            if (!occ) return;
+            const dueTime = occ.getTime();
 
             let runtime = state.alarms[note.id];
             if (!runtime || runtime.dueTime !== dueTime) {
-                if (dueTime > now) return;
                 runtime = {
                     dueTime,
                     repeatsLeft: note.alarmRepeatCount,
                     snoozeMinutes: note.alarmSnoozeMinutes,
-                    nextAt: dueTime
+                    nextAt: now - dueTime > ALARM_GRACE_MS ? null : dueTime
                 };
                 state.alarms[note.id] = runtime;
                 changed = true;
             }
 
-            if (runtime.nextAt === null) return;
-            if (runtime.nextAt > now) return;
-
-            showAlarm(note, runtime);
+            if (runtime.nextAt === null || runtime.nextAt > now) return;
 
             if (runtime.repeatsLeft > 0) {
                 runtime.repeatsLeft -= 1;
@@ -1572,49 +1727,107 @@
                 runtime.nextAt = null;
             }
             changed = true;
+            saveAlarms();
+            showAlarm(note, dueTime);
         });
 
         if (changed) saveAlarms();
     }
 
-    function showAlarm(note, runtime) {
+    function showAlarm(note, dueTime) {
         const title = note.title.trim() || 'Untitled';
         const body = note.content.trim().slice(0, 120) || 'Scheduled note';
         notify(title, body);
         playAlarmSound();
-        toast(`Alarm: ${title} - ${formatTime(note.scheduledAt)}`, {
+        toast(`Alarm: ${title} - ${formatTime(toLocalIso(new Date(dueTime)))}`, {
             label: 'Stop alarm',
             persistent: true,
+            key: 'alarm-' + note.id,
             onClick: () => {
                 stopAlarmSound();
-                runtime.nextAt = null;
-                runtime.repeatsLeft = 0;
-                saveAlarms();
-                if (note.repeatWeekdays && note.repeatWeekdays.length) {
-                    const next = nextWeekdayOccurrence(note, Date.now());
-                    if (next) { note.scheduledAt = toLocalIso(next); delete state.alarms[note.id]; touch(note); saveAlarms(); }
+                const runtime = state.alarms[note.id];
+                if (runtime && runtime.dueTime === dueTime) {
+                    runtime.nextAt = null;
+                    runtime.repeatsLeft = 0;
+                    saveAlarms();
                 }
             }
         });
     }
 
-    let alarmAudio = null, alarmContext = null, alarmOscillator = null;
-    function stopAlarmSound() {
-        if (alarmAudio) { alarmAudio.pause(); alarmAudio.currentTime = 0; alarmAudio = null; }
-        if (alarmOscillator) { try { alarmOscillator.stop(); } catch (_) {} alarmOscillator = null; }
-    }
-    function playAlarmSound() {
-        stopAlarmSound();
-        const saved = localStorage.getItem('remindate.alarmSound.v1');
-        if (saved) { alarmAudio = new Audio(saved); alarmAudio.loop = true; alarmAudio.play().catch(() => {}); return; }
+    let alarmAudio = null, alarmContext = null, alarmMaster = null, alarmStopTimer = null;
+
+    function getAudioContext() {
         try {
             alarmContext = alarmContext || new (window.AudioContext || window.webkitAudioContext)();
             if (alarmContext.state === 'suspended') alarmContext.resume();
-            const osc = alarmContext.createOscillator(), gain = alarmContext.createGain();
-            osc.type = 'sine'; osc.frequency.value = 880; gain.gain.value = 0.12;
-            osc.connect(gain); gain.connect(alarmContext.destination); osc.start(); alarmOscillator = osc;
-        } catch (_) {}
+            return alarmContext;
+        } catch (_) { return null; }
     }
+
+    function stopAlarmSound() {
+        clearTimeout(alarmStopTimer);
+        if (alarmAudio) { alarmAudio.pause(); alarmAudio.currentTime = 0; alarmAudio = null; }
+        if (alarmMaster) {
+            try {
+                alarmMaster.gain.cancelScheduledValues(0);
+                alarmMaster.gain.value = 0;
+                alarmMaster.disconnect();
+            } catch (_) {}
+            alarmMaster = null;
+        }
+    }
+
+    // One short "beep" with a soft attack/release so it doesn't click
+    function beep(ctx, out, freq, at, dur) {
+        const osc = ctx.createOscillator();
+        const env = ctx.createGain();
+        osc.type = 'triangle';
+        osc.frequency.value = freq;
+        env.gain.setValueAtTime(0, at);
+        env.gain.linearRampToValueAtTime(1, at + 0.012);
+        env.gain.setValueAtTime(1, at + dur - 0.03);
+        env.gain.linearRampToValueAtTime(0, at + dur);
+        osc.connect(env);
+        env.connect(out);
+        osc.start(at);
+        osc.stop(at + dur + 0.02);
+    }
+
+    // Standard alarm: a little two-bar tune ("bi-bi-biep  bi-bi-biep  biep-biep-bieeep")
+    // repeated with short pauses, for at most 20 seconds.
+    const ALARM_TUNE = [
+        // [frequency Hz, start (s), duration (s)]
+        [1046.5, 0.00, 0.09], [1318.5, 0.14, 0.09], [1568.0, 0.28, 0.20],   // C E G
+        [1046.5, 0.70, 0.09], [1318.5, 0.84, 0.09], [1568.0, 0.98, 0.20],   // C E G
+        [1568.0, 1.40, 0.09], [1568.0, 1.54, 0.09], [2093.0, 1.68, 0.35]    // G G C'
+    ];
+    const ALARM_TUNE_LENGTH = 2.6; // seconds, including the pause after the tune
+
+    function playAlarmSound() {
+        stopAlarmSound();
+        alarmStopTimer = setTimeout(stopAlarmSound, ALARM_MAX_SOUND_MS);
+        const saved = localStorage.getItem('remindate.alarmSound.v1');
+        if (saved) {
+            alarmAudio = new Audio(saved);
+            alarmAudio.loop = true;
+            alarmAudio.play().catch(() => {});
+            return;
+        }
+        const ctx = getAudioContext();
+        if (!ctx) return;
+        alarmMaster = ctx.createGain();
+        alarmMaster.gain.value = 0.16;
+        alarmMaster.connect(ctx.destination);
+        const start = ctx.currentTime + 0.05;
+        const maxSec = ALARM_MAX_SOUND_MS / 1000;
+        for (let t = 0; t + ALARM_TUNE_LENGTH <= maxSec + 0.5; t += ALARM_TUNE_LENGTH) {
+            ALARM_TUNE.forEach(([freq, offset, dur]) => {
+                if (t + offset + dur <= maxSec) beep(ctx, alarmMaster, freq, start + t + offset, dur);
+            });
+        }
+    }
+
     $('alarmSoundFile').addEventListener('change', (e) => {
         const file = e.target.files && e.target.files[0]; if (!file) return;
         const reader = new FileReader();
@@ -1633,6 +1846,16 @@
         $('alarmSoundStatus').textContent = 'Using standard sound';
         toast('Standard alarm sound selected');
     });
+    $('testAlarmSoundBtn').addEventListener('click', () => {
+        if (alarmAudio || alarmMaster) {
+            stopAlarmSound();
+            $('testAlarmSoundBtn').textContent = 'Test sound';
+            return;
+        }
+        playAlarmSound();
+        $('testAlarmSoundBtn').textContent = 'Stop test';
+        setTimeout(() => { $('testAlarmSoundBtn').textContent = 'Test sound'; }, ALARM_MAX_SOUND_MS);
+    });
     $('openAlarmSoundSettings').addEventListener('click', () => {
         const customSound = localStorage.getItem('remindate.alarmSound.v1');
         $('alarmSoundStatus').textContent = customSound ? 'Using a custom sound' : 'Using standard sound';
@@ -1640,18 +1863,6 @@
     });
     $('alarmSoundClose').addEventListener('click', closeModals);
     $('alarmSoundBackdrop').addEventListener('click', closeModals);
-    function nextWeekdayOccurrence(note, afterTime) {
-        const base = parseDate(note.scheduledAt); if (!base) return null;
-        const weekdays = new Set(note.repeatWeekdays || []);
-        for (let offset = 1; offset <= 3660; offset++) {
-            const d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + offset, base.getHours(), base.getMinutes(), base.getSeconds());
-            const dayIndex = (d.getDay() + 6) % 7;
-            const key = `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
-            if (note.repeatEndDate && key > note.repeatEndDate) return null;
-            if (weekdays.has(dayIndex) && d.getTime() > afterTime) return d;
-        }
-        return null;
-    }
 
     function notify(title, body) {
         if (!('Notification' in window)) return;
@@ -1677,11 +1888,15 @@
             host.id = 'toastHost';
             document.body.appendChild(host);
         }
-        host.innerHTML = '';
+        // Keep alarm toasts (persistent) visible; replace everything else
+        host.querySelectorAll('.toast').forEach((t) => {
+            if (!t.dataset.persistent || (action?.key && t.dataset.key === action.key)) t.remove();
+        });
 
         const el = document.createElement('div');
         el.className = 'toast';
         if (action?.persistent) el.dataset.persistent = 'true';
+        if (action?.key) el.dataset.key = action.key;
         const text = document.createElement('span');
         text.textContent = message;
         el.appendChild(text);
@@ -1698,8 +1913,10 @@
         }
 
         host.appendChild(el);
-        clearTimeout(toastTimer);
-        if (!action?.persistent) toastTimer = setTimeout(() => el.remove(), action ? 20000 : 3500);
+        if (!action?.persistent) {
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => el.remove(), action ? 20000 : 3500);
+        }
     }
 
     /* ---------------- sneltoetsen ---------------- */
@@ -1738,8 +1955,11 @@
         }, { once: true });
     }
 
+    // Browsers only allow sound after a user interaction: unlock it on the first click
+    document.addEventListener('pointerdown', () => { getAudioContext(); }, { once: true });
+
     checkAlarms();
-    setInterval(checkAlarms, 20000);
+    setInterval(checkAlarms, 5000);
 
     function updateSyncStatus() {
         const el = $('syncStatus');
