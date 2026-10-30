@@ -147,6 +147,9 @@
         note.canvasBackground = note.canvasBackground || DEFAULT_CANVAS_BG;
         note.strokes = Array.isArray(note.strokes) ? note.strokes : [];
         note.skipDates = Array.isArray(note.skipDates) ? note.skipDates : [];
+        if (typeof note.html !== 'string') note.html = textToHtml(note.content);
+        note.gridType = note.gridType || 'square';
+        note.grids = note.grids && typeof note.grids === 'object' ? note.grids : {};
     }
 
     // Every local change records "now" as the time of the latest local version
@@ -325,7 +328,8 @@
     function noteItemHtml(note) {
         const preview = note.content.trim()
             ? note.content.replace(/\s+/g, ' ').trim().slice(0, 60)
-            : (note.strokes.length ? 'Drawing' : 'Empty note');
+            : (hasImages(note) ? 'Image' : note.strokes.length ? 'Drawing'
+                : Object.values(note.grids || {}).some((g) => g && Object.keys(g).length) ? 'Grid' : 'Empty note');
         let meta = '';
         if (note.scheduledAt) {
             const next = isRecurring(note) ? nextOccurrence(note, Date.now()) : null;
@@ -639,6 +643,9 @@
             repeatWeekdays: [],
             repeatEndDate: '',
             canvasBackground: DEFAULT_CANVAS_BG,
+            html: '',
+            gridType: 'square',
+            grids: {},
             strokes: [],
             order: topOrder()
         };
@@ -800,18 +807,21 @@
         const empty = !note;
 
         $('noteTitle').disabled = empty;
-        $('noteContent').disabled = empty;
+        editorEl.contentEditable = empty ? 'false' : 'true';
         $('saveNoteBtn').disabled = empty;
         $('deleteNoteBtn').disabled = empty;
         $('noteFolder').disabled = empty;
         $('noteTitle').placeholder = empty ? 'No note selected' : 'Title';
-        $('noteContent').placeholder = empty
+        editorEl.dataset.placeholder = empty
             ? 'Create a note to get started.'
-            : 'Write your note here...';
+            : 'Write your note here... (you can paste or drag images in)';
+        selectImage(null);
+        textDirty = false;
+        gridHistory = [];
 
         if (empty) {
             $('noteTitle').value = '';
-            $('noteContent').value = '';
+            editorEl.innerHTML = '';
             $('noteFolder').innerHTML = folderOptions('');
             state.draw.strokes = [];
             updateScheduleUi(null);
@@ -820,7 +830,8 @@
         }
 
         $('noteTitle').value = note.title;
-        $('noteContent').value = note.content;
+        editorEl.innerHTML = sanitizeHtml(note.html);
+        $('gridType').value = currentGridType(note);
         $('noteFolder').innerHTML = folderOptions(note.folderId);
         updateScheduleUi(note);
 
@@ -830,7 +841,7 @@
             points: (s.points || []).map((p) => ({ x: p.x, y: p.y }))
         }));
 
-        setMode(state.prefs.mode === 'draw' ? 'draw' : 'text');
+        setMode(state.prefs.mode);
         fitCanvas();
         renderStrokes();
     }
@@ -846,17 +857,24 @@
         const note = noteById(state.currentNoteId);
         if (!note) return;
         const title = $('noteTitle').value;
-        const content = $('noteContent').value;
+        let html = note.html;
+        let content = note.content;
+        if (textDirty) {
+            html = sanitizeHtml(editorEl.innerHTML);
+            content = htmlToText(html);
+        }
         const folderId = $('noteFolder').value || null;
         const strokes = state.draw.strokes.map((s) => ({
             color: s.color,
             thicknessRatio: s.thicknessRatio,
             points: s.points.map((p) => ({ x: p.x, y: p.y }))
         }));
-        const changed = note.title !== title || note.content !== content || note.folderId !== folderId ||
+        textDirty = false;
+        const changed = note.title !== title || note.html !== html || note.folderId !== folderId ||
             JSON.stringify(note.strokes) !== JSON.stringify(strokes);
         if (!changed) return;
         note.title = title;
+        note.html = html;
         note.content = content;
         note.folderId = folderId;
         note.strokes = strokes;
@@ -866,7 +884,265 @@
     }
 
     $('noteTitle').addEventListener('input', queueSave);
-    $('noteContent').addEventListener('input', queueSave);
+    /* ---------------- rich text (text + images) ---------------- */
+
+    const editorEl = $('noteContent');
+    let textDirty = false;   // true once the user changed the text since it was loaded
+    let selectedImg = null;
+
+    const RICH_TAGS = new Set(['DIV', 'P', 'BR', 'B', 'STRONG', 'I', 'EM', 'U', 'UL', 'OL', 'LI',
+        'IMG', 'SPAN', 'H1', 'H2', 'H3', 'BLOCKQUOTE']);
+    const DROP_TAGS = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'TEMPLATE', 'META', 'LINK', 'TITLE', 'svg', 'SVG']);
+
+    // Keep only safe, simple formatting + embedded (data:) images
+    function sanitizeHtml(html) {
+        const doc = new DOMParser().parseFromString(`<div>${html || ''}</div>`, 'text/html');
+        const root = doc.body.firstElementChild || doc.body;
+        (function clean(node) {
+            [...node.childNodes].forEach((child) => {
+                if (child.nodeType === 3) return;
+                if (child.nodeType !== 1 || DROP_TAGS.has(child.tagName)) { child.remove(); return; }
+                clean(child);
+                if (!RICH_TAGS.has(child.tagName)) { child.replaceWith(...child.childNodes); return; }
+                [...child.attributes].forEach((attr) => {
+                    const keep = child.tagName === 'IMG' && (attr.name === 'style' || attr.name === 'alt' ||
+                        (attr.name === 'src' && /^data:image\/(png|jpe?g|gif|webp);base64,/i.test(attr.value)));
+                    if (!keep) child.removeAttribute(attr.name);
+                });
+                if (child.tagName === 'IMG') {
+                    if (!child.getAttribute('src')) { child.remove(); return; }
+                    const m = /width:\s*(\d{1,3})%/.exec(child.getAttribute('style') || '');
+                    if (m) child.setAttribute('style', `width:${Math.min(100, Number(m[1]))}%`);
+                    else child.removeAttribute('style');
+                }
+            });
+        })(root);
+        return root.innerHTML;
+    }
+
+    function textToHtml(text) {
+        return escapeHtml(text || '').replace(/\n/g, '<br>');
+    }
+
+    // Plain text version (for previews, alarms and search)
+    function htmlToText(html) {
+        const body = new DOMParser().parseFromString(html || '', 'text/html').body;
+        let out = '';
+        (function walk(node) {
+            node.childNodes.forEach((ch) => {
+                if (ch.nodeType === 3) { out += ch.nodeValue; return; }
+                if (ch.nodeType !== 1) return;
+                if (ch.tagName === 'BR') { out += '\n'; return; }
+                if (ch.tagName === 'IMG') { if (out && !out.endsWith('\n')) out += '\n'; return; }
+                const block = /^(DIV|P|LI|H1|H2|H3|BLOCKQUOTE|UL|OL)$/.test(ch.tagName);
+                if (block && out && !out.endsWith('\n')) out += '\n';
+                walk(ch);
+                if (block && out && !out.endsWith('\n')) out += '\n';
+            });
+        })(body);
+        return out.replace(/ /g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    function hasImages(note) {
+        return /<img\b/i.test(note.html || '');
+    }
+
+    function markTextChanged() {
+        textDirty = true;
+        queueSave();
+    }
+
+    editorEl.addEventListener('input', markTextChanged);
+
+    // Shrink big photos so they fit in browser storage (and sync quickly)
+    const IMAGE_MAX_SIDE = 1400;
+    function imageFileToDataUrl(file) {
+        return new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onerror = () => reject(reader.error);
+            reader.onload = () => {
+                const original = reader.result;
+                if (file.type === 'image/gif' && file.size < 1.5e6) { resolve(original); return; } // keep animation
+                const img = new Image();
+                img.onerror = () => reject(new Error('not an image'));
+                img.onload = () => {
+                    const scale = Math.min(1, IMAGE_MAX_SIDE / Math.max(img.width, img.height));
+                    if (scale === 1 && file.size < 350000 && /^data:image\/(png|jpe?g|webp)/.test(original)) {
+                        resolve(original);
+                        return;
+                    }
+                    const c = document.createElement('canvas');
+                    c.width = Math.max(1, Math.round(img.width * scale));
+                    c.height = Math.max(1, Math.round(img.height * scale));
+                    c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+                    let out = c.toDataURL('image/webp', 0.85);
+                    if (!out.startsWith('data:image/webp')) out = c.toDataURL('image/jpeg', 0.85);
+                    resolve(out);
+                };
+                img.src = original;
+            };
+            reader.readAsDataURL(file);
+        });
+    }
+
+    function placeCaretAtPoint(x, y) {
+        let range = null;
+        if (document.caretRangeFromPoint) range = document.caretRangeFromPoint(x, y);
+        else if (document.caretPositionFromPoint) {
+            const pos = document.caretPositionFromPoint(x, y);
+            if (pos) { range = document.createRange(); range.setStart(pos.offsetNode, pos.offset); }
+        }
+        if (range && editorEl.contains(range.startContainer)) {
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+        }
+    }
+
+    function ensureCaretInEditor() {
+        const sel = window.getSelection();
+        const inside = sel.rangeCount && editorEl.contains(sel.getRangeAt(0).commonAncestorContainer);
+        editorEl.focus();
+        if (inside) {
+            // don't let a new image inherit bold/italic/underline
+            ['bold', 'italic', 'underline'].forEach((cmd) => {
+                if (document.queryCommandState(cmd)) document.execCommand(cmd, false, null);
+            });
+            return;
+        }
+        const range = document.createRange();
+        range.selectNodeContents(editorEl);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+
+    function insertNodeAtCaret(node) {
+        const sel = window.getSelection();
+        let range = sel.rangeCount ? sel.getRangeAt(0) : null;
+        if (!range || !editorEl.contains(range.commonAncestorContainer)) {
+            range = document.createRange();
+            range.selectNodeContents(editorEl);
+            range.collapse(false);
+        }
+        range.deleteContents();
+        range.insertNode(node);
+        range.setStartAfter(node);
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }
+
+    async function insertImageFiles(files) {
+        if (!noteById(state.currentNoteId)) return;
+        const images = [...files].filter((f) => f.type.startsWith('image/'));
+        if (!images.length) return;
+        for (const file of images) {
+            try {
+                const src = await imageFileToDataUrl(file);
+                ensureCaretInEditor();
+                // the image gets its own line, and you continue typing below it
+                const ok = document.execCommand('insertHTML', false, `<div><img src="${src}" alt=""></div><div><br></div>`);
+                if (!ok) {
+                    const img = document.createElement('img');
+                    img.src = src;
+                    insertNodeAtCaret(img);
+                }
+            } catch (err) {
+                toast(`Could not load image: ${file.name}`);
+            }
+        }
+        textDirty = true;
+        flushEditor();
+    }
+
+    editorEl.addEventListener('paste', (e) => {
+        const dt = e.clipboardData;
+        if (!dt) return;
+        const files = [...dt.files].filter((f) => f.type.startsWith('image/'));
+        if (files.length) {
+            e.preventDefault();
+            insertImageFiles(files);
+            return;
+        }
+        const html = dt.getData('text/html');
+        if (html) {
+            e.preventDefault();
+            document.execCommand('insertHTML', false, sanitizeHtml(html));
+            markTextChanged();
+        }
+    });
+
+    const draggingAppItem = () => !!(draggedTreeNoteId || draggedFolderId ||
+        (typeof draggedCalendarNote !== 'undefined' && draggedCalendarNote));
+    editorEl.addEventListener('dragover', (e) => {
+        if (draggingAppItem()) { e.dataTransfer.dropEffect = 'none'; return; }
+        if ([...e.dataTransfer.types].includes('Files')) e.preventDefault();
+    });
+    editorEl.addEventListener('drop', (e) => {
+        if (draggingAppItem()) { e.preventDefault(); return; }
+        const files = [...(e.dataTransfer.files || [])].filter((f) => f.type.startsWith('image/'));
+        if (!files.length) return;
+        e.preventDefault();
+        placeCaretAtPoint(e.clientX, e.clientY);
+        insertImageFiles(files);
+    });
+
+    function selectImage(img) {
+        editorEl.querySelectorAll('img.selected').forEach((i) => i.classList.remove('selected'));
+        selectedImg = img || null;
+        if (selectedImg) selectedImg.classList.add('selected');
+        $('imageTools').hidden = !selectedImg;
+    }
+
+    editorEl.addEventListener('click', (e) => {
+        const img = e.target.closest('img');
+        selectImage(img && editorEl.contains(img) ? img : null);
+    });
+    editorEl.addEventListener('keydown', (e) => {
+        if (selectedImg && (e.key === 'Delete' || e.key === 'Backspace')) {
+            e.preventDefault();
+            selectedImg.remove();
+            selectImage(null);
+            markTextChanged();
+        }
+    });
+
+    try { document.execCommand('styleWithCSS', false, false); } catch (_) { /* ignore */ }
+    // Toolbar buttons must not take the focus away from the text
+    $('textToolbar').addEventListener('mousedown', (e) => {
+        if (e.target.closest('button')) e.preventDefault();
+    });
+    $('textToolbar').addEventListener('click', (e) => {
+        const cmd = e.target.closest('[data-cmd]');
+        if (cmd) {
+            if (!noteById(state.currentNoteId)) return;
+            editorEl.focus();
+            document.execCommand(cmd.dataset.cmd, false, null);
+            markTextChanged();
+            return;
+        }
+        const size = e.target.closest('[data-img-size]');
+        if (size && selectedImg) {
+            selectedImg.style.width = `${size.dataset.imgSize}%`;
+            markTextChanged();
+        }
+    });
+    $('imageRemove').addEventListener('click', () => {
+        if (!selectedImg) return;
+        selectedImg.remove();
+        selectImage(null);
+        markTextChanged();
+    });
+    $('insertImageBtn').addEventListener('click', () => {
+        if (!noteById(state.currentNoteId)) return;
+        $('imageFile').click();
+    });
+    $('imageFile').addEventListener('change', (e) => {
+        if (e.target.files.length) insertImageFiles(e.target.files);
+        e.target.value = '';
+    });
+
 
     $('saveNoteBtn').addEventListener('click', () => {
         flushEditor();
@@ -1359,6 +1635,117 @@
         renderCalendar();
     });
 
+    /* ---------------- zoom (pinch on phone, Ctrl + scroll on computer) ---------------- */
+
+    // Two fingers = zoom/move, one finger = draw. `content` (the canvas) is
+    // scaled with a CSS transform inside `viewport`.
+    function createZoom(viewport, content, onPinchStart) {
+        const z = { scale: 1, tx: 0, ty: 0 };
+        const MAX = 8;
+        const touches = new Map();
+        let pinch = null;
+        let lock = false; // stays on until all fingers are lifted, so a pinch never draws
+        const resetBtn = viewport.querySelector('.zoom-reset');
+
+        function apply() {
+            const w = viewport.clientWidth;
+            const h = content.offsetHeight;
+            z.scale = Math.min(MAX, Math.max(1, z.scale));
+            if (z.scale <= 1.001) { z.scale = 1; z.tx = 0; z.ty = 0; }
+            z.tx = Math.min(0, Math.max(w - w * z.scale, z.tx));
+            z.ty = Math.min(0, Math.max(h - h * z.scale, z.ty));
+            content.style.transform = z.scale === 1 ? '' : `translate(${z.tx}px, ${z.ty}px) scale(${z.scale})`;
+            if (resetBtn) resetBtn.hidden = z.scale === 1;
+        }
+
+        function local(e) {
+            const r = viewport.getBoundingClientRect();
+            return { x: e.clientX - r.left - viewport.clientLeft, y: e.clientY - r.top - viewport.clientTop };
+        }
+
+        function pinchInfo() {
+            const [a, b] = [...touches.values()];
+            return { mid: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, dist: Math.hypot(a.x - b.x, a.y - b.y) || 1 };
+        }
+
+        function startPinch() {
+            const { mid, dist } = pinchInfo();
+            pinch = { s0: z.scale, tx0: z.tx, ty0: z.ty, mid0: mid, d0: dist };
+        }
+
+        // capture phase: runs before the canvas' own drawing handlers
+        viewport.addEventListener('pointerdown', (e) => {
+            if (e.pointerType !== 'touch') return;
+            touches.set(e.pointerId, local(e));
+            if (touches.size >= 2) {
+                e.stopPropagation();
+                e.preventDefault();
+                if (!lock && onPinchStart) onPinchStart();
+                lock = true;
+                startPinch();
+            } else if (lock) {
+                e.stopPropagation();
+            }
+        }, true);
+
+        viewport.addEventListener('pointermove', (e) => {
+            if (!touches.has(e.pointerId)) return;
+            touches.set(e.pointerId, local(e));
+            if (!lock) return;
+            e.stopPropagation();
+            e.preventDefault();
+            if (pinch && touches.size >= 2) {
+                const { mid, dist } = pinchInfo();
+                const s = Math.min(MAX, Math.max(1, pinch.s0 * dist / pinch.d0));
+                const px = (pinch.mid0.x - pinch.tx0) / pinch.s0;
+                const py = (pinch.mid0.y - pinch.ty0) / pinch.s0;
+                z.scale = s;
+                z.tx = mid.x - px * s;
+                z.ty = mid.y - py * s;
+                apply();
+            }
+        }, true);
+
+        const up = (e) => {
+            if (!touches.has(e.pointerId)) return;
+            touches.delete(e.pointerId);
+            if (lock) e.stopPropagation();
+            if (touches.size >= 2) startPinch();
+            else pinch = null;
+            if (touches.size === 0) lock = false;
+        };
+        viewport.addEventListener('pointerup', up, true);
+        viewport.addEventListener('pointercancel', up, true);
+
+        viewport.addEventListener('wheel', (e) => {
+            if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                const p = local(e);
+                const s0 = z.scale;
+                const s = Math.min(MAX, Math.max(1, s0 * Math.exp(-e.deltaY * 0.0025)));
+                z.tx = p.x - (p.x - z.tx) * (s / s0);
+                z.ty = p.y - (p.y - z.ty) * (s / s0);
+                z.scale = s;
+                apply();
+            } else if (z.scale > 1) {
+                e.preventDefault();
+                z.tx -= e.deltaX;
+                z.ty -= e.deltaY;
+                apply();
+            }
+        }, { passive: false });
+
+        if (resetBtn) resetBtn.addEventListener('click', () => { z.scale = 1; apply(); });
+
+        return { apply, reset() { z.scale = 1; apply(); }, isPinching: () => lock };
+    }
+
+    // Sharper canvases (and still sharp-ish when zoomed in)
+    function backingScale(cssWidth) {
+        const k = Math.min(3, Math.max(1.5, (window.devicePixelRatio || 1) * 1.5));
+        return Math.min(k, 3200 / Math.max(1, cssWidth));
+    }
+
     /* ---------------- tekenen ---------------- */
 
     const canvas = $('drawCanvas');
@@ -1367,14 +1754,28 @@
 
     function fitCanvas() {
         if (!drawContainer || drawContainer.style.display === 'none') return;
-        const width = Math.max(320, drawContainer.clientWidth);
+        const cssW = Math.max(200, drawContainer.clientWidth);
+        const width = Math.round(cssW * backingScale(cssW));
         const height = Math.round(width * 0.75);
         if (canvas.width !== width || canvas.height !== height) {
             canvas.width = width;
             canvas.height = height;
             renderStrokes();
         }
+        drawZoom.apply();
     }
+
+    // A pinch started while the first finger was drawing: drop that stroke
+    function cancelStroke() {
+        if (state.draw.drawing && state.draw.current) {
+            const i = state.draw.strokes.indexOf(state.draw.current);
+            if (i >= 0) state.draw.strokes.splice(i, 1);
+        }
+        state.draw.drawing = false;
+        state.draw.current = null;
+        renderStrokes();
+    }
+    const drawZoom = createZoom(drawContainer, canvas, cancelStroke);
 
     function renderStrokes() {
         const note = noteById(state.currentNoteId);
@@ -1414,7 +1815,7 @@
     }
 
     function startStroke(e) {
-        if (state.prefs.mode !== 'draw') return;
+        if (state.prefs.mode !== 'draw' || drawZoom.isPinching()) return;
         e.preventDefault();
         const note = noteById(state.currentNoteId);
         if (!note) return;
@@ -1440,7 +1841,7 @@
         }
         state.draw.current = {
             color: state.draw.color,
-            thicknessRatio: state.draw.size / canvas.width,
+            thicknessRatio: state.draw.size / (canvas.clientWidth || canvas.width),
             points: [pos]
         };
         state.draw.strokes.push(state.draw.current);
@@ -1461,7 +1862,15 @@
         const last = current.points[current.points.length - 1];
         if (last && Math.hypot(pos.x - last.x, pos.y - last.y) < 0.0015) return;
         current.points.push(pos);
-        renderStrokes();
+        // only draw the new piece instead of repainting everything
+        ctx.strokeStyle = current.color;
+        ctx.lineWidth = Math.max(1, current.thicknessRatio * canvas.width);
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        ctx.moveTo(last.x * canvas.width, last.y * canvas.height);
+        ctx.lineTo(pos.x * canvas.width, pos.y * canvas.height);
+        ctx.stroke();
     }
 
     function endStroke() {
@@ -1474,7 +1883,7 @@
     function eraseAt(pos) {
         const note = noteById(state.currentNoteId);
         if (!note) return;
-        const radius = Math.max(0.006, (state.draw.size / 2) / canvas.width);
+        const radius = Math.max(0.006, (state.draw.size / 2) / (canvas.clientWidth || canvas.width));
         const before = state.draw.strokes.length;
         state.draw.strokes = state.draw.strokes.filter((stroke) =>
             !stroke.points.some((p) => Math.hypot(p.x - pos.x, p.y - pos.y) <= radius)
@@ -1523,23 +1932,350 @@
     });
 
     function setMode(mode) {
+        if (!['text', 'draw', 'grid'].includes(mode)) mode = 'text';
         state.prefs.mode = mode;
         savePrefs();
         $('modeText').classList.toggle('active', mode === 'text');
         $('modeDraw').classList.toggle('active', mode === 'draw');
-        $('noteContent').style.display = mode === 'text' ? 'block' : 'none';
+        $('modeGrid').classList.toggle('active', mode === 'grid');
+        editorEl.style.display = mode === 'text' ? 'block' : 'none';
+        $('textToolbar').style.display = mode === 'text' ? 'block' : 'none';
         drawContainer.style.display = mode === 'draw' ? 'block' : 'none';
         $('drawToolbar').style.display = mode === 'draw' ? 'block' : 'none';
+        gridContainer.style.display = mode === 'grid' ? 'block' : 'none';
+        $('gridToolbar').style.display = mode === 'grid' ? 'block' : 'none';
+        $('zoomHint').style.display = mode === 'text' ? 'none' : 'block';
         if (mode === 'draw') {
             requestAnimationFrame(() => {
                 fitCanvas();
                 renderStrokes();
             });
         }
+        if (mode === 'grid') requestAnimationFrame(fitGrid);
     }
 
     $('modeText').addEventListener('click', () => setMode('text'));
     $('modeDraw').addEventListener('click', () => setMode('draw'));
+    $('modeGrid').addEventListener('click', () => setMode('grid'));
+
+    /* ---------------- grid mode (fill cells by drawing over them) ---------------- */
+
+    const gridCanvas = $('gridCanvas');
+    const gctx = gridCanvas.getContext('2d');
+    const gridContainer = $('gridContainer');
+    const GRID_TYPES = ['triangle', 'square', 'pentagon', 'hexagon', 'octagon'];
+    const GRID_CELL_AREA = 1 / 2500; // ≈ 50 × 50 cells, same cell size for every shape
+    const gridCache = {};
+    let gridTool = 'pen';
+    let gridStroke = null;   // { changes: Map(id -> previous color), last: {x, y} }
+    let gridHistory = [];    // undo steps for the open note
+
+    // All cell polygons for a grid type, in coordinates 0..1 (the canvas is square)
+    function buildGrid(type) {
+        if (gridCache[type]) return gridCache[type];
+        const cells = [];
+        const add = (id, pts) => {
+            let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+            pts.forEach(([x, y]) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); });
+            if (x1 <= 0 || y1 <= 0 || x0 >= 1 || y0 >= 1) return;
+            cells.push({ id, pts, x0, y0, x1, y1 });
+        };
+        const A = GRID_CELL_AREA;
+
+        if (type === 'square') {
+            const s = Math.sqrt(A);
+            const n = Math.round(1 / s);
+            for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
+                add(`${c}.${r}`, [[c * s, r * s], [(c + 1) * s, r * s], [(c + 1) * s, (r + 1) * s], [c * s, (r + 1) * s]]);
+            }
+        } else if (type === 'triangle') {
+            const a = Math.sqrt(4 * A / Math.sqrt(3));
+            const h = a * Math.sqrt(3) / 2;
+            const rows = Math.ceil(1 / h);
+            const per = Math.ceil(2 / a) + 2;
+            for (let r = 0; r < rows; r++) {
+                const y = r * h;
+                for (let j = 0; j <= per; j++) {
+                    const x = (j - 1) * a / 2;
+                    const up = (j + r) % 2 === 0;
+                    add(`${j}.${r}`, up
+                        ? [[x, y + h], [x + a, y + h], [x + a / 2, y]]
+                        : [[x, y], [x + a, y], [x + a / 2, y + h]]);
+                }
+            }
+        } else if (type === 'hexagon') {
+            const R = Math.sqrt(2 * A / (3 * Math.sqrt(3)));
+            const w = Math.sqrt(3) * R;
+            const step = 1.5 * R;
+            const rows = Math.ceil(1 / step) + 1;
+            const cols = Math.ceil(1 / w) + 1;
+            for (let r = 0; r <= rows; r++) for (let c = -1; c <= cols; c++) {
+                const cx = c * w + (r % 2 ? w / 2 : 0);
+                const cy = r * step;
+                const pts = [];
+                for (let k = 0; k < 6; k++) {
+                    const t = (Math.PI / 180) * (60 * k - 90);
+                    pts.push([cx + R * Math.cos(t), cy + R * Math.sin(t)]);
+                }
+                add(`${c}.${r}`, pts);
+            }
+        } else if (type === 'pentagon') {
+            // "house" pentagons: rows pointing up and down whose roofs interlock
+            const w = Math.sqrt(A / 0.85);
+            const h = 0.6 * w;      // wall height
+            const rf = 0.5 * w;     // roof height
+            const P = 2 * h + rf;   // height of one down-row + up-row pair
+            const pairs = Math.ceil(1 / P) + 1;
+            const cols = Math.ceil(1 / w) + 1;
+            for (let p = 0; p <= pairs; p++) {
+                const Y = p * P + h;
+                for (let i = -1; i <= cols; i++) {
+                    const dx = (i + 0.5) * w;
+                    add(`d${i}.${p}`, [[dx - w / 2, Y - h], [dx + w / 2, Y - h], [dx + w / 2, Y], [dx, Y + rf], [dx - w / 2, Y]]);
+                    const ux = i * w;
+                    add(`u${i}.${p}`, [[ux, Y], [ux + w / 2, Y + rf], [ux + w / 2, Y + rf + h], [ux - w / 2, Y + rf + h], [ux - w / 2, Y + rf]]);
+                }
+            }
+        } else if (type === 'octagon') {
+            // octagons with small diamonds in between (truncated square tiling)
+            const s = Math.sqrt(A);
+            const n = Math.round(1 / s);
+            const t = s / (2 + Math.SQRT2);
+            const q = s / 2 - t;
+            for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+                const cx = (i + 0.5) * s, cy = (j + 0.5) * s;
+                add(`o${i}.${j}`, [[cx - s / 2, cy - q], [cx - q, cy - s / 2], [cx + q, cy - s / 2], [cx + s / 2, cy - q],
+                    [cx + s / 2, cy + q], [cx + q, cy + s / 2], [cx - q, cy + s / 2], [cx - s / 2, cy + q]]);
+            }
+            for (let j = 0; j <= n; j++) for (let i = 0; i <= n; i++) {
+                const x = i * s, y = j * s;
+                add(`s${i}.${j}`, [[x, y - t], [x + t, y], [x, y + t], [x - t, y]]);
+            }
+        }
+
+        // bucket index for fast "which cell is under the pen?"
+        const B = 40;
+        const buckets = Array.from({ length: B * B }, () => []);
+        const clampB = (v) => Math.min(B - 1, Math.max(0, Math.floor(v * B)));
+        cells.forEach((c) => {
+            for (let by = clampB(c.y0); by <= clampB(c.y1); by++) {
+                for (let bx = clampB(c.x0); bx <= clampB(c.x1); bx++) buckets[by * B + bx].push(c);
+            }
+        });
+        const byId = new Map(cells.map((c) => [c.id, c]));
+        gridCache[type] = { cells, buckets, B, clampB, byId };
+        return gridCache[type];
+    }
+
+    function pointInPoly(x, y, pts) {
+        let inside = false;
+        for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+            const [xi, yi] = pts[i], [xj, yj] = pts[j];
+            if ((yi > y) !== (yj > y) && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+        }
+        return inside;
+    }
+
+    function gridHit(grid, x, y) {
+        const list = grid.buckets[grid.clampB(y) * grid.B + grid.clampB(x)];
+        for (const c of list) {
+            if (x < c.x0 || x > c.x1 || y < c.y0 || y > c.y1) continue;
+            if (pointInPoly(x, y, c.pts)) return c;
+        }
+        return null;
+    }
+
+    function currentGridType(note) {
+        return GRID_TYPES.includes(note && note.gridType) ? note.gridType : 'square';
+    }
+
+    function gridCellsOf(note) {
+        const type = currentGridType(note);
+        if (!note.grids || typeof note.grids !== 'object') note.grids = {};
+        if (!note.grids[type] || typeof note.grids[type] !== 'object') note.grids[type] = {};
+        return note.grids[type];
+    }
+
+    function gridLineColor(bg) {
+        const m = /^#?([0-9a-f]{6})$/i.exec(bg || '');
+        const v = m ? parseInt(m[1], 16) : 0;
+        const lum = (0.299 * ((v >> 16) & 255) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255)) / 255;
+        return lum > 0.55 ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.16)';
+    }
+
+    function tracePoly(c) {
+        const W = gridCanvas.width, H = gridCanvas.height;
+        gctx.moveTo(c.pts[0][0] * W, c.pts[0][1] * H);
+        for (let i = 1; i < c.pts.length; i++) gctx.lineTo(c.pts[i][0] * W, c.pts[i][1] * H);
+        gctx.closePath();
+    }
+
+    function renderGrid() {
+        const note = noteById(state.currentNoteId);
+        const bg = (note && note.canvasBackground) || DEFAULT_CANVAS_BG;
+        const W = gridCanvas.width, H = gridCanvas.height;
+        gctx.setTransform(1, 0, 0, 1, 0, 0);
+        gctx.fillStyle = bg;
+        gctx.fillRect(0, 0, W, H);
+        if (!note) return;
+        const grid = buildGrid(currentGridType(note));
+        const cells = gridCellsOf(note);
+        grid.cells.forEach((c) => {
+            const color = cells[c.id];
+            if (!color) return;
+            gctx.beginPath();
+            tracePoly(c);
+            gctx.fillStyle = color;
+            gctx.fill();
+        });
+        gctx.beginPath();
+        grid.cells.forEach(tracePoly);
+        gctx.strokeStyle = gridLineColor(bg);
+        gctx.lineWidth = Math.max(1, W / 1600);
+        gctx.stroke();
+    }
+
+    function paintGridCell(c, color, bg) {
+        gctx.beginPath();
+        tracePoly(c);
+        gctx.fillStyle = color || bg;
+        gctx.fill();
+        gctx.strokeStyle = gridLineColor(bg);
+        gctx.lineWidth = Math.max(1, gridCanvas.width / 1600);
+        gctx.stroke();
+    }
+
+    function fitGrid() {
+        if (!gridContainer || gridContainer.style.display === 'none') return;
+        const cssW = Math.max(200, gridContainer.clientWidth);
+        const W = Math.round(cssW * backingScale(cssW));
+        if (gridCanvas.width !== W || gridCanvas.height !== W) {
+            gridCanvas.width = W;
+            gridCanvas.height = W;
+        }
+        renderGrid();
+        gridZoom.apply();
+    }
+
+    function gridPos(e) {
+        const rect = gridCanvas.getBoundingClientRect();
+        return { x: (e.clientX - rect.left) / rect.width, y: (e.clientY - rect.top) / rect.height };
+    }
+
+    function gridPaintAt(note, pos) {
+        const grid = buildGrid(currentGridType(note));
+        const c = gridHit(grid, pos.x, pos.y);
+        if (!c) return;
+        const cells = gridCellsOf(note);
+        const prev = cells[c.id];
+        const next = gridTool === 'eraser' ? undefined : state.draw.color;
+        if (prev === next) return;
+        if (!gridStroke.changes.has(c.id)) gridStroke.changes.set(c.id, prev);
+        if (next) cells[c.id] = next; else delete cells[c.id];
+        paintGridCell(c, next, note.canvasBackground || DEFAULT_CANVAS_BG);
+    }
+
+    gridCanvas.addEventListener('pointerdown', (e) => {
+        if (state.prefs.mode !== 'grid' || gridZoom.isPinching()) return;
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        e.preventDefault();
+        try { gridCanvas.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+        const pos = gridPos(e);
+        gridStroke = { changes: new Map(), last: pos, type: currentGridType(note) };
+        gridPaintAt(note, pos);
+    });
+
+    gridCanvas.addEventListener('pointermove', (e) => {
+        if (!gridStroke) return;
+        e.preventDefault();
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        const pos = gridPos(e);
+        const { last } = gridStroke;
+        const dist = Math.hypot(pos.x - last.x, pos.y - last.y);
+        const steps = Math.max(1, Math.ceil(dist / (Math.sqrt(GRID_CELL_AREA) * 0.25)));
+        for (let i = 1; i <= steps; i++) {
+            gridPaintAt(note, { x: last.x + (pos.x - last.x) * (i / steps), y: last.y + (pos.y - last.y) * (i / steps) });
+        }
+        gridStroke.last = pos;
+    });
+
+    function endGridStroke() {
+        if (!gridStroke) return;
+        const stroke = gridStroke;
+        gridStroke = null;
+        const note = noteById(state.currentNoteId);
+        if (!note || !stroke.changes.size) return;
+        gridHistory.push(stroke);
+        if (gridHistory.length > 100) gridHistory.shift();
+        touch(note);
+        renderTree();
+    }
+
+    function revertGridChanges(note, stroke) {
+        const cells = note.grids[stroke.type] || (note.grids[stroke.type] = {});
+        stroke.changes.forEach((prev, id) => {
+            if (prev) cells[id] = prev; else delete cells[id];
+        });
+    }
+
+    // A pinch started while the first finger was already painting: undo that paint
+    function cancelGridStroke() {
+        const note = noteById(state.currentNoteId);
+        if (gridStroke && note) revertGridChanges(note, gridStroke);
+        gridStroke = null;
+        renderGrid();
+    }
+
+    gridCanvas.addEventListener('pointerup', endGridStroke);
+    gridCanvas.addEventListener('pointercancel', endGridStroke);
+
+    const gridZoom = createZoom(gridContainer, gridCanvas, cancelGridStroke);
+
+    function setGridTool(tool) {
+        gridTool = tool;
+        $('gridPen').classList.toggle('active', tool === 'pen');
+        $('gridEraser').classList.toggle('active', tool === 'eraser');
+        gridCanvas.style.cursor = tool === 'eraser' ? 'cell' : 'crosshair';
+    }
+
+    $('gridPen').addEventListener('click', () => setGridTool('pen'));
+    $('gridEraser').addEventListener('click', () => setGridTool('eraser'));
+    $('gridColorSwatch').addEventListener('click', () => openModal('colorModal'));
+    $('gridBg').addEventListener('click', () => $('toolCanvasBg').click());
+
+    $('gridType').addEventListener('change', () => {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        note.gridType = $('gridType').value;
+        gridHistory = [];
+        touch(note);
+        renderGrid();
+    });
+
+    $('gridUndo').addEventListener('click', () => {
+        const note = noteById(state.currentNoteId);
+        const stroke = gridHistory.pop();
+        if (!note || !stroke) return;
+        revertGridChanges(note, stroke);
+        touch(note);
+        renderGrid();
+    });
+
+    $('gridClear').addEventListener('click', async () => {
+        const note = noteById(state.currentNoteId);
+        if (!note || !Object.keys(gridCellsOf(note)).length) return;
+        if (!(await askConfirm('Clear grid', 'Clear all filled cells of this grid?', 'Clear'))) return;
+        note.grids[currentGridType(note)] = {};
+        gridHistory = [];
+        touch(note);
+        renderGrid();
+        renderTree();
+    });
+
+    window.addEventListener('resize', fitGrid);
+
 
     /* ---------------- kleuren ---------------- */
 
@@ -1621,8 +2357,10 @@
     buildPalette($('palette'), (color) => {
         state.draw.color = color;
         $('colorSwatch').style.background = color;
+        $('gridColorSwatch').style.background = color;
         $('colorCustom').value = color;
         setTool('pen');
+        setGridTool('pen');
     });
 
     buildPalette($('canvasPalette'), (color) => {
@@ -1632,6 +2370,7 @@
         $('canvasBgCustom').value = color;
         touch(note);
         renderStrokes();
+        renderGrid();
     });
 
     $('colorSwatch').addEventListener('click', () => openModal('colorModal'));
@@ -1641,7 +2380,9 @@
     $('colorCustom').addEventListener('input', (e) => {
         state.draw.color = e.target.value;
         $('colorSwatch').style.background = e.target.value;
+        $('gridColorSwatch').style.background = e.target.value;
         setTool('pen');
+        setGridTool('pen');
     });
 
     $('toolCanvasBg').addEventListener('click', () => {
@@ -1658,6 +2399,7 @@
         note.canvasBackground = e.target.value;
         touch(note);
         renderStrokes();
+        renderGrid();
     });
 
     /* ---------------- zijbalk-layout ---------------- */

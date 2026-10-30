@@ -87,6 +87,7 @@
                         <div class="mode-toggle">
                             <button class="toggle-btn active" id="modeText">Text</button>
                             <button class="toggle-btn" id="modeDraw">Draw</button>
+                            <button class="toggle-btn" id="modeGrid">Grid</button>
                         </div>
                         <select id="noteFolder" class="folder-select" title="Folder for this note"></select>
                     </div>
@@ -133,11 +134,54 @@
                         </div>
                     </div>
 
-                    <div class="editor-body">
-                        <textarea id="noteContent" class="text-editor" placeholder="Write your note here..."></textarea>
-                        <div class="draw-container" id="drawContainer" style="display:none;">
-                            <canvas id="drawCanvas" width="800" height="600"></canvas>
+                    <div class="card draw-toolbar text-toolbar" id="textToolbar">
+                        <div class="draw-tools">
+                            <button class="tool-btn" data-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+                            <button class="tool-btn" data-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+                            <button class="tool-btn" data-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+                            <button class="tool-btn" data-cmd="insertUnorderedList" title="Bullet list">&bull; List</button>
+                            <button class="tool-btn" id="insertImageBtn" title="Insert image (you can also paste or drag images in)">🖼 Image</button>
+                            <input type="file" id="imageFile" accept="image/*" multiple hidden>
+                            <span class="image-tools" id="imageTools" hidden>
+                                <span class="tool-label">Image size</span>
+                                <button class="tool-btn" data-img-size="25" title="Small">S</button>
+                                <button class="tool-btn" data-img-size="50" title="Medium">M</button>
+                                <button class="tool-btn" data-img-size="75" title="Large">L</button>
+                                <button class="tool-btn" data-img-size="100" title="Full width">Full</button>
+                                <button class="tool-btn" id="imageRemove" title="Remove image">Remove</button>
+                            </span>
                         </div>
+                    </div>
+
+                    <div class="card draw-toolbar" id="gridToolbar" style="display:none;">
+                        <div class="draw-tools">
+                            <button class="swatch" id="gridColorSwatch" title="Color"></button>
+                            <button class="tool-btn active" id="gridPen" title="Fill cells">✎</button>
+                            <button class="tool-btn" id="gridEraser" title="Erase cells">⌫</button>
+                            <select id="gridType" class="folder-select grid-type" title="Grid shape">
+                                <option value="triangle">Triangles</option>
+                                <option value="square">Squares</option>
+                                <option value="pentagon">Pentagons</option>
+                                <option value="hexagon">Hexagons</option>
+                                <option value="octagon">Octagons</option>
+                            </select>
+                            <button class="tool-btn" id="gridUndo" title="Undo">↶</button>
+                            <button class="tool-btn" id="gridClear" title="Clear grid">✕</button>
+                            <button class="tool-btn" id="gridBg" title="Background">◧</button>
+                        </div>
+                    </div>
+
+                    <div class="editor-body">
+                        <div id="noteContent" class="text-editor rich-editor" contenteditable="true" spellcheck="true" data-placeholder="Write your note here..."></div>
+                        <div class="draw-container zoom-viewport" id="drawContainer" style="display:none;">
+                            <canvas id="drawCanvas" width="800" height="600"></canvas>
+                            <button class="zoom-reset" type="button" hidden title="Reset zoom">1:1</button>
+                        </div>
+                        <div class="draw-container zoom-viewport" id="gridContainer" style="display:none;">
+                            <canvas id="gridCanvas" width="800" height="800"></canvas>
+                            <button class="zoom-reset" type="button" hidden title="Reset zoom">1:1</button>
+                        </div>
+                        <div class="zoom-hint" id="zoomHint" style="display:none;">Pinch with two fingers to zoom and move · Ctrl + scroll on a computer</div>
                     </div>
                 </section>
 
