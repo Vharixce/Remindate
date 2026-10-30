@@ -1963,7 +1963,7 @@
     const gridCanvas = $('gridCanvas');
     const gctx = gridCanvas.getContext('2d');
     const gridContainer = $('gridContainer');
-    const GRID_TYPES = ['triangle', 'square', 'pentagon', 'hexagon', 'octagon'];
+    const GRID_TYPES = ['triangle', 'square', 'hexagon', 'octagon'];
     const GRID_CELL_AREA = 1 / 2500; // ≈ 50 × 50 cells, same cell size for every shape
     const gridCache = {};
     let gridTool = 'pen';
@@ -1989,7 +1989,7 @@
                 add(`${c}.${r}`, [[c * s, r * s], [(c + 1) * s, r * s], [(c + 1) * s, (r + 1) * s], [c * s, (r + 1) * s]]);
             }
         } else if (type === 'triangle') {
-            const a = Math.sqrt(4 * A / Math.sqrt(3));
+            const a = 0.75 * Math.sqrt(4 * A / Math.sqrt(3)); // triangles are a bit smaller (25%)
             const h = a * Math.sqrt(3) / 2;
             const rows = Math.ceil(1 / h);
             const per = Math.ceil(2 / a) + 2;
@@ -2018,23 +2018,6 @@
                     pts.push([cx + R * Math.cos(t), cy + R * Math.sin(t)]);
                 }
                 add(`${c}.${r}`, pts);
-            }
-        } else if (type === 'pentagon') {
-            // "house" pentagons: rows pointing up and down whose roofs interlock
-            const w = Math.sqrt(A / 0.85);
-            const h = 0.6 * w;      // wall height
-            const rf = 0.5 * w;     // roof height
-            const P = 2 * h + rf;   // height of one down-row + up-row pair
-            const pairs = Math.ceil(1 / P) + 1;
-            const cols = Math.ceil(1 / w) + 1;
-            for (let p = 0; p <= pairs; p++) {
-                const Y = p * P + h;
-                for (let i = -1; i <= cols; i++) {
-                    const dx = (i + 0.5) * w;
-                    add(`d${i}.${p}`, [[dx - w / 2, Y - h], [dx + w / 2, Y - h], [dx + w / 2, Y], [dx, Y + rf], [dx - w / 2, Y]]);
-                    const ux = i * w;
-                    add(`u${i}.${p}`, [[ux, Y], [ux + w / 2, Y + rf], [ux + w / 2, Y + rf + h], [ux - w / 2, Y + rf + h], [ux - w / 2, Y + rf]]);
-                }
             }
         } else if (type === 'octagon') {
             // octagons with small diamonds in between (truncated square tiling)
