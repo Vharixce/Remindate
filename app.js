@@ -1198,7 +1198,8 @@
             chip.classList.add('voice-chip');
             chip.contentEditable = 'false';
             const name = chip.getAttribute('data-name') || 'Voice note';
-            chip.innerHTML = `<button class="voice-play" type="button" title="Play">▶</button>` +
+            chip.innerHTML = `<span class="voice-handle" title="Drag to move">⠿</span>` +
+                `<button class="voice-play" type="button" title="Play">▶</button>` +
                 `<span class="voice-name" title="Click to rename">🎤 ${escapeHtml(name)}</span>` +
                 `<span class="voice-time">${formatSeconds(chip.getAttribute('data-duration'))}</span>` +
                 `<button class="voice-remove" type="button" title="Remove voice note">✕</button>`;
@@ -1247,10 +1248,120 @@
         if (e.target.closest('.voice-chip')) e.preventDefault();
     });
 
+    /* ---- move a voice note by dragging its handle (mouse and touch) ---- */
+    let voiceDrag = null; // { chip, pointerId, range }
+    const dropMarker = document.createElement('div');
+    dropMarker.className = 'voice-drop-marker';
+    document.body.appendChild(dropMarker);
+
+    function caretRangeAt(x, y) {
+        let range = null;
+        if (document.caretRangeFromPoint) range = document.caretRangeFromPoint(x, y);
+        else if (document.caretPositionFromPoint) {
+            const pos = document.caretPositionFromPoint(x, y);
+            if (pos) { range = document.createRange(); range.setStart(pos.offsetNode, pos.offset); range.collapse(true); }
+        }
+        return range;
+    }
+
+    // Where would the chip land if dropped at (x, y)?
+    function voiceDropRange(x, y, chip) {
+        const over = document.elementFromPoint(x, y);
+        const otherChip = over && over.closest && over.closest('.voice-chip');
+        let range;
+        if (otherChip && editorEl.contains(otherChip)) {
+            // over a chip (also itself): drop before or after it
+            if (otherChip === chip) return null;
+            const r = otherChip.getBoundingClientRect();
+            range = document.createRange();
+            if (x < r.left + r.width / 2) range.setStartBefore(otherChip); else range.setStartAfter(otherChip);
+            range.collapse(true);
+            return range;
+        }
+        range = caretRangeAt(x, y);
+        if (!range || !editorEl.contains(range.startContainer) || chip.contains(range.startContainer)) {
+            const r = editorEl.getBoundingClientRect();
+            if (x < r.left || x > r.right || y < r.top || y > r.bottom) return null;
+            range = document.createRange();               // below the last line: put it at the end
+            range.selectNodeContents(editorEl);
+            range.collapse(false);
+        }
+        return range;
+    }
+
+    function showDropMarker(range) {
+        if (!range) { dropMarker.style.display = 'none'; return; }
+        let rect = range.getClientRects()[0] || range.getBoundingClientRect();
+        if (!rect || (!rect.height && !rect.width)) {
+            const node = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
+            const child = node && node.childNodes[range.startOffset];
+            const el = child && child.nodeType === 1 ? child : node;
+            rect = el ? el.getBoundingClientRect() : null;
+            if (rect && child && child.nodeType === 1) rect = { left: rect.left, top: rect.top, height: rect.height || 18 };
+            else if (rect) rect = { left: rect.right, top: rect.top, height: Math.min(rect.height || 18, 24) };
+        }
+        if (!rect) { dropMarker.style.display = 'none'; return; }
+        dropMarker.style.display = 'block';
+        dropMarker.style.left = `${rect.left - 1}px`;
+        dropMarker.style.top = `${rect.top}px`;
+        dropMarker.style.height = `${Math.max(16, rect.height || 18)}px`;
+    }
+
+    editorEl.addEventListener('pointerdown', (e) => {
+        const handle = e.target.closest('.voice-handle');
+        if (!handle) return;
+        const chip = handle.closest('.voice-chip');
+        if (!chip || !editorEl.contains(chip)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try { handle.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+        voiceDrag = { chip, handle, pointerId: e.pointerId, range: null };
+        chip.classList.add('dragging');
+        document.body.classList.add('voice-dragging');
+    });
+
+    editorEl.addEventListener('pointermove', (e) => {
+        if (!voiceDrag || e.pointerId !== voiceDrag.pointerId) return;
+        e.preventDefault();
+        // scroll the page when you drag near the top/bottom edge
+        const scroller = editorEl.closest('.content');
+        if (scroller) {
+            const r = scroller.getBoundingClientRect();
+            if (e.clientY < r.top + 40) scroller.scrollTop -= 12;
+            else if (e.clientY > r.bottom - 40) scroller.scrollTop += 12;
+        }
+        voiceDrag.range = voiceDropRange(e.clientX, e.clientY, voiceDrag.chip);
+        showDropMarker(voiceDrag.range);
+    });
+
+    function endVoiceDrag(e, cancelled) {
+        if (!voiceDrag || (e && e.pointerId !== voiceDrag.pointerId)) return;
+        const { chip, range } = voiceDrag;
+        voiceDrag = null;
+        chip.classList.remove('dragging');
+        document.body.classList.remove('voice-dragging');
+        dropMarker.style.display = 'none';
+        if (cancelled || !range || !editorEl.contains(range.startContainer)) return;
+        // dropping right next to where it already is: nothing to do
+        if ((range.startContainer === chip.parentNode &&
+            (chip.parentNode.childNodes[range.startOffset] === chip || chip.parentNode.childNodes[range.startOffset - 1] === chip))) return;
+        range.insertNode(chip);
+        // keep a space on both sides so you can still type around it
+        const nbsp = () => document.createTextNode('\u00a0');
+        if (!chip.previousSibling || (chip.previousSibling.nodeType === 1 && chip.previousSibling.matches('.voice-chip'))) chip.before(nbsp());
+        if (!chip.nextSibling || (chip.nextSibling.nodeType === 1 && chip.nextSibling.matches('.voice-chip'))) chip.after(nbsp());
+        markTextChanged();
+        flushEditor();
+    }
+    editorEl.addEventListener('pointerup', (e) => endVoiceDrag(e, false));
+    editorEl.addEventListener('pointercancel', (e) => endVoiceDrag(e, true));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && voiceDrag) endVoiceDrag(null, true); });
+
     async function handleVoiceChipClick(e) {
         const chip = e.target.closest('.voice-chip');
         if (!chip || !editorEl.contains(chip)) return false;
         e.preventDefault();
+        if (e.target.closest('.voice-handle')) return true;
         if (e.target.closest('.voice-play')) { toggleVoicePlayback(chip); return true; }
         if (e.target.closest('.voice-remove')) {
             const ok = await askConfirm('Remove voice note', `Remove "${chip.getAttribute('data-name')}" from this note?`, 'Delete');

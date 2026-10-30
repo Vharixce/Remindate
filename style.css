@@ -1342,3 +1342,14 @@ input[type="color"] {
 #voicePreview { width: 100%; }
 #voicePreview[hidden] { display: none; }
 .voice-upload { margin-right: auto; }
+.voice-handle {
+    cursor: grab; color: var(--text-dim); font-size: 14px; line-height: 1;
+    padding: 2px 1px 2px 3px; touch-action: none; user-select: none;
+}
+.voice-handle:hover { color: var(--text); }
+.voice-chip.dragging { opacity: .45; }
+body.voice-dragging, body.voice-dragging * { cursor: grabbing !important; user-select: none !important; }
+.voice-drop-marker {
+    display: none; position: fixed; z-index: 200; width: 3px; border-radius: 2px;
+    background: var(--primary); box-shadow: 0 0 0 2px rgba(124,111,240,.3); pointer-events: none;
+}
