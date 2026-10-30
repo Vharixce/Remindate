@@ -441,6 +441,7 @@
                         <button class="folder-action-btn folder-rename" data-folder-id="${folder.id}" title="Rename folder">Rename</button>
                         <button class="folder-action-btn folder-delete" data-folder-id="${folder.id}" title="Delete folder">Delete</button>
                     </span>
+                    <button class="folder-add" data-folder-id="${folder.id}" title="New note in this folder">+</button>
                 </div>
                 ${expanded ? `<div class="folder-items">${notes.length ? notes.map(noteItemHtml).join('') : '<div class="folder-empty">Empty</div>'}</div>` : ''}
             `;
@@ -455,6 +456,7 @@
                 <div class="folder-header" data-folder-id="__none">
                     <span class="folder-chevron">${expanded ? '&#9662;' : '&#9656;'}</span>
                     <span class="folder-name">No folder</span>
+                    <button class="folder-add" data-folder-id="__none" title="New note without a folder">+</button>
                 </div>
                 ${expanded ? `<div class="folder-items">${unfiled.map(noteItemHtml).join('')}</div>` : ''}
             `;
@@ -569,6 +571,12 @@
         if (noteEl) {
             selectNote(noteEl.dataset.noteId);
             if (isMobile()) app.classList.remove('mobile-open');
+            return;
+        }
+        const add = e.target.closest('.folder-add');
+        if (add) {
+            e.stopPropagation();
+            newNote({ folderId: add.dataset.folderId === '__none' ? null : add.dataset.folderId });
             return;
         }
         const rename = e.target.closest('.folder-rename');
@@ -688,11 +696,15 @@
         renderEditor();
     }
 
-    function newNote() {
+    // opts: { folderId, scheduledAt }
+    function newNote(opts = {}) {
         flushEditor();
         setTab('note');
         const now = new Date().toISOString();
-        state.currentFolderId = null;
+        const folderId = opts.folderId && state.folders.some((f) => f.id === opts.folderId) ? opts.folderId : null;
+        state.currentFolderId = folderId;
+        const expandId = folderId || '__none';
+        if (!state.prefs.expandedFolders.includes(expandId)) state.prefs.expandedFolders.push(expandId);
         state.draw.strokes = [];
         state.draw.tool = 'pen';
         state.draw.drawing = false;
@@ -704,8 +716,8 @@
             content: '',
             createdAt: now,
             modifiedAt: now,
-            scheduledAt: null,
-            folderId: null,
+            scheduledAt: opts.scheduledAt || null,
+            folderId,
             alarmEnabled: false,
             emailEnabled: false,
             emailTo: '',
@@ -1700,7 +1712,7 @@
     $('deleteNoteBtn').addEventListener('click', () => deleteNote());
 
 
-    $('newNoteBtn').addEventListener('click', newNote);
+    $('newNoteBtn').addEventListener('click', () => newNote());
 
     /* ---------------- folders ---------------- */
 
@@ -1863,16 +1875,20 @@
         '#1e3a8a', '#8b5cf6', '#d946ef', '#fca5a5', '#86efac', '#4b5563', '#d1d5db'];
 
     function renderNoteColors(note) {
-        const current = note ? note.color : '';
+        renderColorPicker($('noteColors'), note ? note.color : '', !!note, 'noteColorCustom');
+    }
+
+    function renderColorPicker(host, current, enabled, customId) {
+        const note = enabled;
         const custom = current && !NOTE_COLORS.includes(current);
-        $('noteColors').innerHTML =
+        host.innerHTML =
             `<button type="button" class="note-color auto${!current ? ' selected' : ''}" data-color="" title="Default colour" ${note ? '' : 'disabled'}></button>` +
             NOTE_COLORS.map((c) => {
                 const name = (PALETTE_NAMED.find(([pc]) => pc === c) || [, c])[1];
                 return `<button type="button" class="note-color${c === current ? ' selected' : ''}" data-color="${c}" style="background:${c}" title="${name}" ${note ? '' : 'disabled'}></button>`;
             }).join('') +
             `<label class="note-color custom${custom ? ' selected' : ''}" title="Custom colour" style="${custom ? `background:${current}` : ''}">` +
-            `<input type="color" id="noteColorCustom" value="${current || '#8b5cf6'}" ${note ? '' : 'disabled'}></label>`;
+            `<input type="color" id="${customId}" value="${current || '#8b5cf6'}" ${note ? '' : 'disabled'}></label>`;
     }
 
     function setNoteColor(color) {
@@ -1985,14 +2001,43 @@
     const EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']{2,}$/;
     const defaultEmail = () => localStorage.getItem(EMAIL_KEY) || '';
 
-    function openEmailModal() {
+    // Who is the email popup for? The open note, or the "Schedule note" window.
+    let emailTarget = null;
+
+    function editorEmailTarget() {
         const note = noteById(state.currentNoteId);
-        if (!note) return;
-        $('emailAddress').value = note.emailTo || defaultEmail();
-        $('emailTurnOff').hidden = !note.emailEnabled;
+        if (!note) return null;
+        return {
+            note,
+            address: () => note.emailTo,
+            enabled: () => note.emailEnabled,
+            save(address) {
+                note.emailTo = address;
+                note.emailEnabled = true;
+                touch(note);
+                updateScheduleUi(note);
+                renderTree();
+                if (state.prefs.activeTab === 'calendar') renderCalendar();
+            },
+            off() {
+                note.emailEnabled = false;
+                touch(note);
+                updateScheduleUi(note);
+                if (state.prefs.activeTab === 'calendar') renderCalendar();
+            },
+            sync() { $('emailEnabled').checked = !!(noteById(note.id) || {}).emailEnabled; }
+        };
+    }
+
+    function openEmailModal(target) {
+        emailTarget = target && target.address ? target : editorEmailTarget();
+        if (!emailTarget) return;
+        const note = emailTarget.note;
+        $('emailAddress').value = emailTarget.address() || defaultEmail();
+        $('emailTurnOff').hidden = !emailTarget.enabled();
         const sync = githubConfigured();
         const notes = [];
-        if (!note.scheduledAt) notes.push('This note has no date yet: pick a date and time in the Scheduled card.');
+        if (!emailTarget.isPlan && !note.scheduledAt) notes.push('This note has no date yet: pick a date and time in the Scheduled card.');
         if (!sync) notes.push('Emails are sent via GitHub using your synced notes, so turn on <b>GitHub Sync</b> (with automatic sync).');
         else if (!githubConfig.autoSync) notes.push('Turn on <b>automatic sync</b> in GitHub Sync settings, or press “Sync now” after changes, so GitHub knows about this note.');
         notes.push('One-time setup: the email workflow must be set up on GitHub (see <b>EMAIL-SETUP.md</b> in the Remindate folder). Emails can arrive a few minutes late.');
@@ -2003,13 +2048,12 @@
 
     function closeEmailModal() {
         $('emailModal').classList.remove('active');
-        const note = noteById(state.currentNoteId);
-        $('emailEnabled').checked = !!(note && note.emailEnabled);
+        if (emailTarget) emailTarget.sync();
+        emailTarget = null;
     }
 
     function saveEmailSettings() {
-        const note = noteById(state.currentNoteId);
-        if (!note) return;
+        if (!emailTarget) return;
         const address = $('emailAddress').value.trim();
         if (!EMAIL_RE.test(address)) {
             toast('Please enter a valid email address');
@@ -2017,13 +2061,8 @@
             return;
         }
         if ($('emailRemember').checked) localStorage.setItem(EMAIL_KEY, address);
-        note.emailTo = address;
-        note.emailEnabled = true;
-        touch(note);
+        emailTarget.save(address);
         closeEmailModal();
-        updateScheduleUi(note);
-        renderTree();
-        if (state.prefs.activeTab === 'calendar') renderCalendar();
         toast(`Email notification on → ${address}`);
     }
 
@@ -2042,20 +2081,15 @@
         updateScheduleUi(note);
         if (state.prefs.activeTab === 'calendar') renderCalendar();
     });
-    $('emailSettingsLink').addEventListener('click', openEmailModal);
+    $('emailSettingsLink').addEventListener('click', () => openEmailModal());
     $('emailSave').addEventListener('click', saveEmailSettings);
     $('emailAddress').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveEmailSettings(); } });
     $('emailCancel').addEventListener('click', closeEmailModal);
     $('emailClose').addEventListener('click', closeEmailModal);
     $('emailBackdrop').addEventListener('click', closeEmailModal);
     $('emailTurnOff').addEventListener('click', () => {
-        const note = noteById(state.currentNoteId);
-        if (!note) return;
-        note.emailEnabled = false;
-        touch(note);
+        if (emailTarget) emailTarget.off();
         closeEmailModal();
-        updateScheduleUi(note);
-        if (state.prefs.activeTab === 'calendar') renderCalendar();
     });
     $('repeatCount').addEventListener('input', () => {
         $('repeatCountLabel').textContent = $('repeatCount').value;
@@ -2177,7 +2211,9 @@
                     <div class="holiday-name">${escapeHtml(h.name)}${h.locals.length ? ` <span class="holiday-local">${escapeHtml(h.locals.join(' / '))}</span>` : ''}</div>
                     <div class="calendar-note-time">${escapeHtml(h.sets.join(', '))} ${h.obs ? 'observance (not a day off)' : 'holiday'}</div>
                 </div>`).join('');
-        host.innerHTML = `<div class="calendar-day-title">${label}</div>` + holidayHtml + (notes.length
+        host.innerHTML = `<div class="calendar-day-head"><div class="calendar-day-title">${label}</div>` +
+            `<button class="btn btn-primary calendar-add-note" id="calendarAddNote" type="button" title="New note on this day">+ Note</button></div>` +
+            holidayHtml + (notes.length
             ? notes.map((n) => `<div class="calendar-note-item${n.color ? ' colored' : ''}" draggable="true" data-note-id="${n.id}" style="${n.color ? `border-left-color:${n.color}` : ''}" title="Click to open – drag to another day">
                     <span class="item-actions">
                         <button class="folder-action-btn note-unschedule" data-note-id="${n.id}" title="Remove this note/alarm from this date">Remove from date</button>
@@ -2548,6 +2584,13 @@
     }
 
     $('calendarDayNotes').addEventListener('click', (e) => {
+        if (e.target.closest('#calendarAddNote')) {
+            const d = state.calendarDay;
+            if (!d) return;
+            newNote({ scheduledAt: toLocalIso(new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9, 0, 0)) });
+            toast(`New note on ${d.getDate()} ${MONTHS[d.getMonth()]} – give it a title`);
+            return;
+        }
         const unschedule = e.target.closest('.note-unschedule');
         if (unschedule) { removeFromDate(unschedule.dataset.noteId, state.calendarDay); return; }
         const rename = e.target.closest('.note-rename');
@@ -2633,8 +2676,56 @@
         });
         $('repeatEndDate').value = note.repeatEndDate || '';
         refreshRepeatOptions(repeatModeOf(note));
+        pendingPlan.color = note.color || '';
+        pendingPlan.email = { enabled: !!note.emailEnabled, to: note.emailTo || '' };
+        renderPlanExtras();
         planModal.classList.add('active');
     }
+
+    function renderPlanExtras() {
+        if (!pendingPlan) return;
+        renderColorPicker($('planNoteColors'), pendingPlan.color, true, 'planColorCustom');
+        $('planEmailEnabled').checked = pendingPlan.email.enabled;
+        $('planEmailLabel').textContent = pendingPlan.email.enabled && pendingPlan.email.to ? `→ ${pendingPlan.email.to}` : '';
+    }
+
+    function planEmailTarget() {
+        const note = pendingPlan && noteById(pendingPlan.noteId);
+        if (!note) return null;
+        return {
+            note,
+            isPlan: true,
+            address: () => pendingPlan.email.to,
+            enabled: () => pendingPlan.email.enabled,
+            save(address) { pendingPlan.email = { enabled: true, to: address }; },
+            off() { if (pendingPlan) pendingPlan.email.enabled = false; },
+            sync() { renderPlanExtras(); }
+        };
+    }
+
+    $('planNoteColors').addEventListener('click', (e) => {
+        const btn = e.target.closest('button.note-color');
+        if (!btn || !pendingPlan) return;
+        pendingPlan.color = btn.dataset.color;
+        renderPlanExtras();
+    });
+    $('planNoteColors').addEventListener('change', (e) => {
+        if (e.target.id !== 'planColorCustom' || !pendingPlan) return;
+        pendingPlan.color = e.target.value.toLowerCase();
+        renderPlanExtras();
+    });
+    $('planEmailEnabled').addEventListener('change', () => {
+        if (!pendingPlan) return;
+        if ($('planEmailEnabled').checked) {
+            const address = pendingPlan.email.to || defaultEmail();
+            if (!address) { openEmailModal(planEmailTarget()); return; }
+            pendingPlan.email = { enabled: true, to: address };
+        } else {
+            pendingPlan.email.enabled = false;
+        }
+        renderPlanExtras();
+    });
+    $('planEmailLink').addEventListener('click', () => openEmailModal(planEmailTarget()));
 
     function closePlanFromTreeModal() {
         planModal.classList.remove('active');
@@ -2682,6 +2773,9 @@
         note.repeatMode = REPEAT_MODES.includes(mode) ? mode : 'none';
         note.repeatWeekdays = mode === 'weekly' ? weekdays : [];
         note.repeatEndDate = mode === 'none' ? '' : $('repeatEndDate').value;
+        note.color = /^#[0-9a-f]{6}$/i.test(pendingPlan.color || '') ? pendingPlan.color : '';
+        note.emailEnabled = !!(pendingPlan.email.enabled && pendingPlan.email.to);
+        note.emailTo = pendingPlan.email.to || note.emailTo || '';
         resetAlarmRuntime(note);
         touch(note);
         renderTree();
@@ -3354,7 +3448,7 @@
     function closeModals() {
         if (dialogResolve) { finishDialog(false); return; }
         if ($('voiceModal').classList.contains('active')) resetVoiceModal();
-        if ($('emailModal').classList.contains('active')) closeEmailModal();
+        if ($('emailModal').classList.contains('active')) { closeEmailModal(); return; }
         document.querySelectorAll('.modal.active').forEach((m) => m.classList.remove('active'));
     }
 

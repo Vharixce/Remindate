@@ -275,7 +275,18 @@
                 <label for="planFromTreeTime">Time</label>
                 <input type="time" id="planFromTreeTime" step="1">
             </div>
-            <label class="check-row"><input type="checkbox" id="planFromTreeAlarm"> Alarm</label>
+            <div class="check-row-group">
+                <label class="check-row"><input type="checkbox" id="planFromTreeAlarm"> Alarm</label>
+                <span class="check-row email-row">
+                    <input type="checkbox" id="planEmailEnabled" aria-label="Send Email Notification">
+                    <button type="button" class="link-btn" id="planEmailLink" title="Set the email address">Send Email Notification</button>
+                    <span class="email-to" id="planEmailLabel"></span>
+                </span>
+            </div>
+            <div class="note-color-row">
+                <span class="advanced-label">Colour in calendar</span>
+                <div class="note-colors" id="planNoteColors"></div>
+            </div>
             <div class="step-row">
                 <span title="How many extra times the alarm rings (snooze)">Alarm repeats</span>
                 <input type="range" id="planFromTreeRepeat" min="0" max="10" value="0">
