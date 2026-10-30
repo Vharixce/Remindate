@@ -142,6 +142,7 @@
         note.alarmEnabled = !!note.alarmEnabled;
         note.emailEnabled = !!note.emailEnabled;
         note.emailTo = typeof note.emailTo === 'string' ? note.emailTo : '';
+        note.color = /^#[0-9a-f]{6}$/i.test(note.color || '') ? note.color : '';
         note.alarmRepeatCount = Number(note.alarmRepeatCount) || 0;
         note.alarmSnoozeMinutes = Number(note.alarmSnoozeMinutes) || 5;
         note.repeatWeekdays = Array.isArray(note.repeatWeekdays) ? note.repeatWeekdays : [];
@@ -708,6 +709,7 @@
             alarmEnabled: false,
             emailEnabled: false,
             emailTo: '',
+            color: '',
             alarmRepeatCount: 0,
             alarmSnoozeMinutes: 5,
             repeatWeekdays: [],
@@ -1854,7 +1856,41 @@
         }).join('');
 
         $('scheduleSummary').innerHTML = scheduleSummaryHtml(note);
+        renderNoteColors(note);
     }
+
+    const NOTE_COLORS = ['#ef4444', '#f97316', '#facc15', '#22c55e', '#14b8a6', '#22d3ee', '#3b82f6',
+        '#1e3a8a', '#8b5cf6', '#d946ef', '#fca5a5', '#86efac', '#4b5563', '#d1d5db'];
+
+    function renderNoteColors(note) {
+        const current = note ? note.color : '';
+        const custom = current && !NOTE_COLORS.includes(current);
+        $('noteColors').innerHTML =
+            `<button type="button" class="note-color auto${!current ? ' selected' : ''}" data-color="" title="Default colour" ${note ? '' : 'disabled'}></button>` +
+            NOTE_COLORS.map((c) => {
+                const name = (PALETTE_NAMED.find(([pc]) => pc === c) || [, c])[1];
+                return `<button type="button" class="note-color${c === current ? ' selected' : ''}" data-color="${c}" style="background:${c}" title="${name}" ${note ? '' : 'disabled'}></button>`;
+            }).join('') +
+            `<label class="note-color custom${custom ? ' selected' : ''}" title="Custom colour" style="${custom ? `background:${current}` : ''}">` +
+            `<input type="color" id="noteColorCustom" value="${current || '#8b5cf6'}" ${note ? '' : 'disabled'}></label>`;
+    }
+
+    function setNoteColor(color) {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        note.color = /^#[0-9a-f]{6}$/i.test(color) ? color.toLowerCase() : '';
+        touch(note);
+        renderNoteColors(note);
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
+    }
+
+    $('noteColors').addEventListener('click', (e) => {
+        const btn = e.target.closest('button.note-color');
+        if (btn) setNoteColor(btn.dataset.color);
+    });
+    $('noteColors').addEventListener('change', (e) => {
+        if (e.target.id === 'noteColorCustom') setNoteColor(e.target.value);
+    });
 
     // "When will this note show up?" overview
     function scheduleSummaryHtml(note) {
@@ -2093,17 +2129,32 @@
             cell.className = 'calendar-day' + (inMonth ? '' : ' other-month') +
                 (isToday ? ' today' : '') + (isSelected ? ' selected' : '');
             cell.dataset.date = dayKey(day);
-            const chips = scheduled.slice(0, 2).map((n) =>
-                `<div class="calendar-chip${isRecurring(n) ? ' recurring' : ''}" draggable="true" data-note-id="${n.id}" title="${escapeHtml(n.title.trim() || 'Untitled')} – click to open, drag to another day">${escapeHtml(n.title.trim() || 'Untitled')}</div>`
-            ).join('');
+            const holidays = holidaysOn(day);
+            const items = [
+                ...holidays.map((h) => `<div class="holiday-chip" title="${escapeHtml(holidayTitle(h))}">${escapeHtml(h.name)}</div>`),
+                ...scheduled.map((n) =>
+                    `<div class="calendar-chip${isRecurring(n) ? ' recurring' : ''}" draggable="true" data-note-id="${n.id}" style="${noteChipStyle(n)}" title="${escapeHtml(n.title.trim() || 'Untitled')} – click to open, drag to another day">${escapeHtml(n.title.trim() || 'Untitled')}</div>`)
+            ];
+            if (holidays.length) cell.classList.add('has-holiday');
             cell.innerHTML = `<div class="calendar-day-number">${day.getDate()}</div>` +
-                (scheduled.length
-                    ? `<div class="calendar-chips">${chips}${scheduled.length > 2 ? `<div class="calendar-more">+${scheduled.length - 2} more</div>` : ''}</div><div class="calendar-dot"></div>`
+                (items.length
+                    ? `<div class="calendar-chips">${items.slice(0, 2).join('')}${items.length > 2 ? `<div class="calendar-more">+${items.length - 2} more</div>` : ''}</div>${scheduled.length ? '<div class="calendar-dot"></div>' : ''}`
                     : '');
             grid.appendChild(cell);
         }
 
         renderCalendarDay();
+    }
+
+    // readable text on a coloured chip
+    function textColorFor(hex) {
+        const v = parseInt(hex.slice(1), 16);
+        const lum = (0.299 * ((v >> 16) & 255) + 0.587 * ((v >> 8) & 255) + 0.114 * (v & 255)) / 255;
+        return lum > 0.6 ? '#111827' : '#ffffff';
+    }
+
+    function noteChipStyle(note) {
+        return note.color ? `background:${note.color};color:${textColorFor(note.color)}` : '';
     }
 
     function notesOnDay(day) {
@@ -2120,9 +2171,14 @@
             return;
         }
         const notes = notesOnDay(day);
+        const holidays = holidaysOn(day);
         const label = `${day.getDate()} ${MONTHS[day.getMonth()]} ${day.getFullYear()}`;
-        host.innerHTML = `<div class="calendar-day-title">${label}</div>` + (notes.length
-            ? notes.map((n) => `<div class="calendar-note-item" draggable="true" data-note-id="${n.id}" title="Click to open – drag to another day">
+        const holidayHtml = holidays.map((h) => `<div class="holiday-item">
+                    <div class="holiday-name">${escapeHtml(h.name)}${h.locals.length ? ` <span class="holiday-local">${escapeHtml(h.locals.join(' / '))}</span>` : ''}</div>
+                    <div class="calendar-note-time">${escapeHtml(h.sets.join(', '))} ${h.obs ? 'observance (not a day off)' : 'holiday'}</div>
+                </div>`).join('');
+        host.innerHTML = `<div class="calendar-day-title">${label}</div>` + holidayHtml + (notes.length
+            ? notes.map((n) => `<div class="calendar-note-item${n.color ? ' colored' : ''}" draggable="true" data-note-id="${n.id}" style="${n.color ? `border-left-color:${n.color}` : ''}" title="Click to open – drag to another day">
                     <span class="item-actions">
                         <button class="folder-action-btn note-unschedule" data-note-id="${n.id}" title="Remove this note/alarm from this date">Remove from date</button>
                         <button class="folder-action-btn note-rename" data-note-id="${n.id}" title="Rename note">Rename</button>
@@ -2131,8 +2187,227 @@
                     <div>${escapeHtml(n.title.trim() || 'Untitled')}</div>
                     <div class="calendar-note-time">${formatTime(n.scheduledAt)}${n.alarmEnabled ? ' · alarm' : ''}${n.emailEnabled ? ' · email' : ''}${isRecurring(n) ? ' · ' + repeatSummary(n) : ''}</div>
                 </div>`).join('')
-            : '<div class="calendar-hint">No notes scheduled for this day.</div>');
+            : (holidays.length ? '' : '<div class="calendar-hint">No notes scheduled for this day.</div>'));
     }
+    /* ---------------- holidays (calculated in the app, no internet needed) ---------------- */
+
+    const HOLIDAY_SETS = [
+        { code: 'INT', label: 'International', short: 'Intl' },
+        { code: 'GB', label: 'British', short: 'UK' },
+        { code: 'NL', label: 'Dutch', short: 'NL' },
+        { code: 'FR', label: 'French', short: 'FR' },
+        { code: 'SE', label: 'Swedish', short: 'SE' },
+        { code: 'DE', label: 'German', short: 'DE' },
+        { code: 'JP', label: 'Japanese', short: 'JP' }
+    ];
+
+    // Easter Sunday (Gregorian calendar, "anonymous" algorithm)
+    function easterSunday(y) {
+        const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4;
+        const f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3);
+        const h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4;
+        const l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451);
+        const month = Math.floor((h + l - 7 * m + 114) / 31), day = ((h + l - 7 * m + 114) % 31) + 1;
+        return new Date(y, month - 1, day);
+    }
+
+    const D = (y, m, d) => new Date(y, m - 1, d);
+    const addDays = (date, n) => new Date(date.getFullYear(), date.getMonth(), date.getDate() + n);
+    // n-th given weekday (0 = Sunday) of a month
+    const nthWeekday = (y, m, wd, n) => { const first = D(y, m, 1); return D(y, m, 1 + ((wd - first.getDay() + 7) % 7) + (n - 1) * 7); };
+    const lastWeekday = (y, m, wd) => { const last = D(y, m + 1, 0); return addDays(last, -((last.getDay() - wd + 7) % 7)); };
+    // first given weekday on or after a date
+    const weekdayFrom = (date, wd) => addDays(date, (wd - date.getDay() + 7) % 7);
+
+    function holidayList(code, y) {
+        const E = easterSunday(y);
+        const H = (date, name, local) => ({ date, name, local: local || '', obs: false });
+        // observance: a special day, but not a day off
+        const O = (date, name, local) => ({ date, name, local: local || '', obs: true });
+        const lastSunday = (m) => lastWeekday(y, m, 0);
+        switch (code) {
+            case 'INT': return [
+                H(D(y, 1, 1), "New Year's Day"), H(D(y, 2, 14), "Valentine's Day"),
+                H(D(y, 3, 8), "International Women's Day"), H(D(y, 4, 22), 'Earth Day'),
+                H(D(y, 5, 1), "International Workers' Day"), H(D(y, 10, 31), 'Halloween'),
+                H(D(y, 12, 24), 'Christmas Eve'), H(D(y, 12, 25), 'Christmas Day'), H(D(y, 12, 31), "New Year's Eve"),
+                O(D(y, 3, 20), 'International Day of Happiness'), O(D(y, 4, 1), "April Fools' Day"),
+                O(D(y, 4, 10), 'Siblings Day'), O(nthWeekday(y, 5, 0, 2), "Mother's Day"),
+                O(D(y, 6, 1), "International Children's Day"), O(nthWeekday(y, 6, 0, 3), "Father's Day"),
+                O(D(y, 7, 30), 'International Friendship Day'), O(D(y, 8, 1), 'Girlfriend Day'),
+                O(D(y, 10, 3), 'Boyfriend Day'), O(D(y, 11, 19), "International Men's Day")
+            ];
+            case 'GB': {
+                const list = [
+                    H(D(y, 1, 1), "New Year's Day"), H(addDays(E, -2), 'Good Friday'), H(addDays(E, 1), 'Easter Monday'),
+                    H(nthWeekday(y, 5, 1, 1), 'Early May bank holiday'), H(lastWeekday(y, 5, 1), 'Spring bank holiday'),
+                    H(lastWeekday(y, 8, 1), 'Summer bank holiday'), H(D(y, 12, 25), 'Christmas Day'), H(D(y, 12, 26), 'Boxing Day'),
+                    O(D(y, 2, 14), "Valentine's Day"), O(addDays(E, -21), 'Mothering Sunday'),
+                    O(nthWeekday(y, 6, 0, 3), "Father's Day"), O(D(y, 10, 31), 'Halloween'),
+                    O(D(y, 11, 5), 'Bonfire Night'), O(D(y, 3, 17), "St Patrick's Day")
+                ];
+                // bank holidays on a weekend move to the next weekday
+                const ny = D(y, 1, 1);
+                if (ny.getDay() === 6 || ny.getDay() === 0) list.push(H(weekdayFrom(ny, 1), "New Year's Day (substitute day)"));
+                const xmas = D(y, 12, 25).getDay();
+                if (xmas === 6) { list.push(H(D(y, 12, 27), 'Christmas Day (substitute day)'), H(D(y, 12, 28), 'Boxing Day (substitute day)')); }
+                else if (xmas === 0) { list.push(H(D(y, 12, 27), 'Christmas Day (substitute day)')); }
+                else if (xmas === 5) { list.push(H(D(y, 12, 28), 'Boxing Day (substitute day)')); }
+                return list;
+            }
+            case 'NL': {
+                const kingsDay = D(y, 4, 27).getDay() === 0 ? D(y, 4, 26) : D(y, 4, 27);
+                return [
+                    H(D(y, 1, 1), "New Year's Day", 'Nieuwjaarsdag'), H(addDays(E, -2), 'Good Friday', 'Goede Vrijdag'),
+                    H(E, 'Easter Sunday', 'Eerste Paasdag'), H(addDays(E, 1), 'Easter Monday', 'Tweede Paasdag'),
+                    H(kingsDay, "King's Day", 'Koningsdag'), H(D(y, 5, 5), 'Liberation Day', 'Bevrijdingsdag'),
+                    H(addDays(E, 39), 'Ascension Day', 'Hemelvaartsdag'), H(addDays(E, 49), 'Whit Sunday', 'Eerste Pinksterdag'),
+                    H(addDays(E, 50), 'Whit Monday', 'Tweede Pinksterdag'), H(D(y, 12, 25), 'Christmas Day', 'Eerste Kerstdag'),
+                    H(D(y, 12, 26), 'Boxing Day', 'Tweede Kerstdag'),
+                    O(D(y, 2, 14), "Valentine's Day", 'Valentijnsdag'), O(nthWeekday(y, 5, 0, 2), "Mother's Day", 'Moederdag'),
+                    O(D(y, 5, 4), 'Remembrance of the Dead', 'Dodenherdenking'), O(nthWeekday(y, 6, 0, 3), "Father's Day", 'Vaderdag'),
+                    O(nthWeekday(y, 9, 2, 3), "Prince's Day", 'Prinsjesdag'), O(D(y, 11, 11), "St Martin's Day", 'Sint-Maarten'),
+                    O(D(y, 12, 5), 'Sinterklaas Eve', 'Sinterklaasavond / Pakjesavond'), O(D(y, 12, 31), "New Year's Eve", 'Oudejaarsavond')
+                ];
+            }
+            case 'FR': return [
+                H(D(y, 1, 1), "New Year's Day", "Jour de l'an"), H(addDays(E, 1), 'Easter Monday', 'Lundi de Pâques'),
+                H(D(y, 5, 1), 'Labour Day', 'Fête du Travail'), H(D(y, 5, 8), 'Victory in Europe Day', 'Victoire 1945'),
+                H(addDays(E, 39), 'Ascension Day', 'Ascension'), H(addDays(E, 50), 'Whit Monday', 'Lundi de Pentecôte'),
+                H(D(y, 7, 14), 'Bastille Day', 'Fête nationale'), H(D(y, 8, 15), 'Assumption Day', 'Assomption'),
+                H(D(y, 11, 1), "All Saints' Day", 'Toussaint'), H(D(y, 11, 11), 'Armistice Day', 'Armistice 1918'),
+                H(D(y, 12, 25), 'Christmas Day', 'Noël'),
+                O(D(y, 2, 14), "Valentine's Day", 'Saint-Valentin'),
+                O(dayKey(lastSunday(5)) === dayKey(addDays(E, 49)) ? nthWeekday(y, 6, 0, 1) : lastSunday(5), "Mother's Day", 'Fête des Mères'),
+                O(nthWeekday(y, 6, 0, 3), "Father's Day", 'Fête des Pères'), O(D(y, 6, 21), 'Music Day', 'Fête de la Musique')
+            ];
+            case 'SE': return [
+                H(D(y, 1, 1), "New Year's Day", 'Nyårsdagen'), H(D(y, 1, 6), 'Epiphany', 'Trettondedag jul'),
+                H(addDays(E, -2), 'Good Friday', 'Långfredagen'), H(E, 'Easter Sunday', 'Påskdagen'),
+                H(addDays(E, 1), 'Easter Monday', 'Annandag påsk'), H(D(y, 5, 1), 'May Day', 'Första maj'),
+                H(addDays(E, 39), 'Ascension Day', 'Kristi himmelsfärdsdag'), H(addDays(E, 49), 'Whit Sunday', 'Pingstdagen'),
+                H(D(y, 6, 6), 'National Day of Sweden', 'Sveriges nationaldag'),
+                H(weekdayFrom(D(y, 6, 19), 5), 'Midsummer Eve', 'Midsommarafton'),
+                H(weekdayFrom(D(y, 6, 20), 6), 'Midsummer Day', 'Midsommardagen'),
+                H(weekdayFrom(D(y, 10, 31), 6), "All Saints' Day", 'Alla helgons dag'),
+                H(D(y, 12, 24), 'Christmas Eve', 'Julafton'), H(D(y, 12, 25), 'Christmas Day', 'Juldagen'),
+                H(D(y, 12, 26), 'Boxing Day', 'Annandag jul'), H(D(y, 12, 31), "New Year's Eve", 'Nyårsafton'),
+                O(D(y, 2, 14), "Valentine's Day", 'Alla hjärtans dag'), O(D(y, 4, 30), 'Walpurgis Night', 'Valborgsmässoafton'),
+                O(lastSunday(5), "Mother's Day", 'Mors dag'), O(nthWeekday(y, 11, 0, 2), "Father's Day", 'Fars dag'),
+                O(D(y, 12, 13), "St Lucia's Day", 'Luciadagen')
+            ];
+            case 'DE': return [
+                H(D(y, 1, 1), "New Year's Day", 'Neujahr'), H(addDays(E, -2), 'Good Friday', 'Karfreitag'),
+                H(addDays(E, 1), 'Easter Monday', 'Ostermontag'), H(D(y, 5, 1), 'Labour Day', 'Tag der Arbeit'),
+                H(addDays(E, 39), 'Ascension Day', 'Christi Himmelfahrt'), H(addDays(E, 50), 'Whit Monday', 'Pfingstmontag'),
+                H(D(y, 10, 3), 'German Unity Day', 'Tag der Deutschen Einheit'),
+                H(D(y, 12, 25), 'Christmas Day', '1. Weihnachtstag'), H(D(y, 12, 26), 'Second Day of Christmas', '2. Weihnachtstag'),
+                O(D(y, 2, 14), "Valentine's Day", 'Valentinstag'), O(nthWeekday(y, 5, 0, 2), "Mother's Day", 'Muttertag'),
+                O(addDays(E, 39), "Father's Day", 'Vatertag'), O(D(y, 11, 11), "St Martin's Day", 'Martinstag'),
+                O(D(y, 12, 6), "St Nicholas' Day", 'Nikolaustag'), O(D(y, 12, 24), 'Christmas Eve', 'Heiligabend'),
+                O(D(y, 12, 31), "New Year's Eve", 'Silvester')
+            ];
+            case 'JP': {
+                const t = y - 1980, leap = Math.floor(t / 4);
+                const vernal = Math.floor(20.8431 + 0.242194 * t - leap);
+                const autumnal = Math.floor(23.2488 + 0.242194 * t - leap);
+                const list = [
+                    H(D(y, 1, 1), "New Year's Day", '元日'), H(nthWeekday(y, 1, 1, 2), 'Coming of Age Day', '成人の日'),
+                    H(D(y, 2, 11), 'National Foundation Day', '建国記念の日'), H(D(y, 2, 23), "Emperor's Birthday", '天皇誕生日'),
+                    H(D(y, 3, vernal), 'Vernal Equinox Day', '春分の日'), H(D(y, 4, 29), 'Shōwa Day', '昭和の日'),
+                    H(D(y, 5, 3), 'Constitution Memorial Day', '憲法記念日'), H(D(y, 5, 4), 'Greenery Day', 'みどりの日'),
+                    H(D(y, 5, 5), "Children's Day", 'こどもの日'), H(nthWeekday(y, 7, 1, 3), 'Marine Day', '海の日'),
+                    H(D(y, 8, 11), 'Mountain Day', '山の日'), H(nthWeekday(y, 9, 1, 3), 'Respect for the Aged Day', '敬老の日'),
+                    H(D(y, 9, autumnal), 'Autumnal Equinox Day', '秋分の日'), H(nthWeekday(y, 10, 1, 2), 'Sports Day', 'スポーツの日'),
+                    H(D(y, 11, 3), 'Culture Day', '文化の日'), H(D(y, 11, 23), 'Labour Thanksgiving Day', '勤労感謝の日')
+                ];
+                // special days that are not days off (added after the substitute-day rules below run on `list`)
+                const extras = [
+                    O(D(y, 2, 3), 'Setsubun', '節分'), O(D(y, 2, 14), "Valentine's Day", 'バレンタインデー'),
+                    O(D(y, 3, 3), "Girls' Day (Hinamatsuri)", 'ひな祭り'), O(D(y, 3, 14), 'White Day', 'ホワイトデー'),
+                    O(nthWeekday(y, 5, 0, 2), "Mother's Day", '母の日'), O(nthWeekday(y, 6, 0, 3), "Father's Day", '父の日'),
+                    O(D(y, 7, 7), 'Tanabata', '七夕'), O(D(y, 11, 15), 'Shichi-Go-San', '七五三'),
+                    O(D(y, 12, 24), 'Christmas Eve', 'クリスマスイブ'), O(D(y, 12, 31), "New Year's Eve", '大晦日')
+                ];
+                const taken = new Set(list.map((h) => dayKey(h.date)));
+                // a holiday on a Sunday gives the next free weekday off
+                list.slice().sort((a, b) => a.date - b.date).forEach((h) => {
+                    if (h.date.getDay() !== 0) return;
+                    let d = addDays(h.date, 1);
+                    while (taken.has(dayKey(d))) d = addDays(d, 1);
+                    taken.add(dayKey(d));
+                    list.push(H(d, 'Substitute Holiday', '振替休日'));
+                });
+                // a single day between two holidays is also a holiday
+                list.slice().forEach((h) => {
+                    const mid = addDays(h.date, 1);
+                    if (!taken.has(dayKey(mid)) && taken.has(dayKey(addDays(h.date, 2))) && mid.getDay() !== 0) {
+                        taken.add(dayKey(mid));
+                        list.push(H(mid, "Citizens' Holiday", '国民の休日'));
+                    }
+                });
+                return list.concat(extras);
+            }
+            default: return [];
+        }
+    }
+
+    const holidayCache = new Map(); // "NL-2026" -> Map(dayKey -> [holiday])
+    function holidaysByDay(code, y) {
+        const key = `${code}-${y}`;
+        if (!holidayCache.has(key)) {
+            const map = new Map();
+            holidayList(code, y).forEach((h) => {
+                const k = dayKey(h.date);
+                if (!map.has(k)) map.set(k, []);
+                map.get(k).push(h);
+            });
+            holidayCache.set(key, map);
+        }
+        return holidayCache.get(key);
+    }
+
+    function enabledHolidaySets() {
+        const on = Array.isArray(state.prefs.holidays) ? state.prefs.holidays : [];
+        return HOLIDAY_SETS.filter((s) => on.includes(s.code));
+    }
+
+    // Holidays on a day, the same holiday from several countries merged into one
+    function holidaysOn(day) {
+        const merged = new Map();
+        enabledHolidaySets().forEach((set) => {
+            (holidaysByDay(set.code, day.getFullYear()).get(dayKey(day)) || []).forEach((h) => {
+                const item = merged.get(h.name) || { name: h.name, locals: [], sets: [], obs: true };
+                if (!h.obs) item.obs = false; // a day off somewhere = holiday
+                if (h.local && !item.locals.includes(h.local)) item.locals.push(h.local);
+                item.sets.push(set.short);
+                merged.set(h.name, item);
+            });
+        });
+        return [...merged.values()];
+    }
+
+    function holidayTitle(h) {
+        return `${h.name}${h.locals.length ? ` (${h.locals.join(' / ')})` : ''} · ${h.sets.join(', ')} ${h.obs ? 'observance' : 'holiday'}`;
+    }
+
+    /* settings window: which holidays to show */
+    $('holidayOptions').innerHTML = HOLIDAY_SETS.map((s) =>
+        `<label class="check-row holiday-option"><input type="checkbox" value="${s.code}"> ${s.label}</label>`
+    ).join('');
+
+    function syncHolidayCheckboxes() {
+        const on = Array.isArray(state.prefs.holidays) ? state.prefs.holidays : [];
+        $('holidayOptions').querySelectorAll('input').forEach((input) => { input.checked = on.includes(input.value); });
+    }
+
+    $('holidayOptions').addEventListener('change', () => {
+        state.prefs.holidays = [...$('holidayOptions').querySelectorAll('input:checked')].map((el) => el.value);
+        savePrefs();
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
+    });
+
+
 
     $('calendarGrid').addEventListener('click', (e) => {
         const chip = e.target.closest('.calendar-chip');
@@ -3211,6 +3486,7 @@
     $('toggleSidebarSide').addEventListener('click', toggleSidebarSide);
     // Hamburger button: opens the settings window
     $('toggleSidebarMain').addEventListener('click', () => {
+        syncHolidayCheckboxes();
         $('settingsModal').classList.add('active');
     });
     $('settingsClose').addEventListener('click', closeModals);

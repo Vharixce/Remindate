@@ -141,6 +141,10 @@
                                     <div class="skipped-list" id="edSkipped"></div>
                                 </div>
                             </div>
+                            <div class="note-color-row">
+                                <span class="advanced-label">Colour in calendar</span>
+                                <div class="note-colors" id="noteColors"></div>
+                            </div>
                             <div class="schedule-summary" id="scheduleSummary"></div>
                             <div class="schedule-buttons">
                                 <button class="btn alarm-sound-settings-btn" id="openAlarmSoundSettings" type="button">Alarm Sound Settings</button>
@@ -412,7 +416,12 @@
                 <div>Settings</div>
                 <button class="icon-btn" id="settingsClose" title="Close">&times;</button>
             </div>
-            <div class="settings-empty">No settings yet.</div>
+            <div class="settings-section">
+                <div class="settings-title">Holidays in the calendar</div>
+                <div class="settings-sub">Tick the holidays that should show up automatically.</div>
+                <div class="holiday-options" id="holidayOptions"></div>
+                <div class="holiday-legend"><span class="holiday-swatch"></span> Holidays look like this in the calendar</div>
+            </div>
         </div>
     </div>
 
