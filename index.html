@@ -142,6 +142,7 @@
                             <button class="tool-btn" data-cmd="insertUnorderedList" title="Bullet list">&bull; List</button>
                             <button class="tool-btn" id="insertImageBtn" title="Insert image (you can also paste or drag images in)">🖼 Image</button>
                             <input type="file" id="imageFile" accept="image/*" multiple hidden>
+                            <button class="tool-btn" id="insertVoiceBtn" title="Record a voice note">🎤 Voice</button>
                             <span class="image-tools" id="imageTools" hidden>
                                 <span class="tool-label">Image size</span>
                                 <button class="tool-btn" data-img-size="25" title="Small">S</button>
@@ -312,6 +313,36 @@
             <div class="trash-list" id="trashList"></div>
             <div class="modal-actions">
                 <button class="btn btn-danger" id="emptyTrashBtn">Empty trash</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Voice note recorder -->
+    <div class="modal" id="voiceModal">
+        <div class="modal-backdrop" id="voiceBackdrop"></div>
+        <div class="modal-content voice-modal">
+            <div class="modal-header">
+                <div>Voice note</div>
+                <button class="icon-btn" id="voiceClose" title="Close">&times;</button>
+            </div>
+            <div class="voice-recorder">
+                <button class="voice-rec-btn" id="voiceRecBtn" type="button" title="Start recording">●</button>
+                <div class="voice-rec-info">
+                    <div class="voice-timer" id="voiceTimer">0:00</div>
+                    <div class="voice-status" id="voiceStatus">Press the red button to start recording</div>
+                    <div class="voice-level"><div class="voice-level-bar" id="voiceLevelBar"></div></div>
+                </div>
+            </div>
+            <audio id="voicePreview" controls hidden></audio>
+            <div class="plan-row">
+                <label for="voiceName">Name</label>
+                <input type="text" id="voiceName" autocomplete="off">
+            </div>
+            <div class="modal-actions">
+                <button class="btn voice-upload" id="voiceUploadBtn" type="button">Upload audio file</button>
+                <input type="file" id="voiceFile" accept="audio/*" multiple hidden>
+                <button class="btn" id="voiceCancel" type="button">Cancel</button>
+                <button class="btn btn-primary" id="voiceInsert" type="button" disabled>Insert</button>
             </div>
         </div>
     </div>
