@@ -140,6 +140,8 @@
         note.scheduledAt = note.scheduledAt || null;
         note.folderId = note.folderId || null;
         note.alarmEnabled = !!note.alarmEnabled;
+        note.emailEnabled = !!note.emailEnabled;
+        note.emailTo = typeof note.emailTo === 'string' ? note.emailTo : '';
         note.alarmRepeatCount = Number(note.alarmRepeatCount) || 0;
         note.alarmSnoozeMinutes = Number(note.alarmSnoozeMinutes) || 5;
         note.repeatWeekdays = Array.isArray(note.repeatWeekdays) ? note.repeatWeekdays : [];
@@ -704,6 +706,8 @@
             scheduledAt: null,
             folderId: null,
             alarmEnabled: false,
+            emailEnabled: false,
+            emailTo: '',
             alarmRepeatCount: 0,
             alarmSnoozeMinutes: 5,
             repeatWeekdays: [],
@@ -1772,6 +1776,9 @@
             $('scheduleDate').disabled = true;
             $('scheduleTime').disabled = true;
             $('alarmEnabled').disabled = true;
+            $('emailEnabled').checked = false;
+            $('emailEnabled').disabled = true;
+            $('emailToLabel').textContent = '';
             updateEditorRepeatUi(null);
             body.style.opacity = '0.5';
             applyScheduleCollapse();
@@ -1789,6 +1796,9 @@
         $('scheduleTime').value = d
             ? `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}` : '';
         $('alarmEnabled').checked = note.alarmEnabled;
+        $('emailEnabled').disabled = false;
+        $('emailEnabled').checked = note.emailEnabled;
+        $('emailToLabel').textContent = note.emailEnabled && note.emailTo ? `→ ${note.emailTo}` : '';
         $('repeatCount').value = note.alarmRepeatCount;
         $('snoozeMinutes').value = note.alarmSnoozeMinutes;
         $('repeatCountLabel').textContent = note.alarmRepeatCount;
@@ -1851,9 +1861,9 @@
         if (!note) return '';
         const base = parseDate(note.scheduledAt);
         if (!base) return '<div class="summary-line dim">Not in the calendar yet. Pick a date to schedule this note.</div>';
-        const alarm = note.alarmEnabled
+        const alarm = (note.alarmEnabled
             ? `🔔 Alarm on${note.alarmRepeatCount ? `, rings ${note.alarmRepeatCount + 1}× (every ${note.alarmSnoozeMinutes} min)` : ''}`
-            : '🔕 No alarm';
+            : '🔕 No alarm') + (note.emailEnabled && note.emailTo ? ` · ✉️ Email to ${escapeHtml(note.emailTo)}` : '');
         if (!isRecurring(note)) {
             const passed = base.getTime() < Date.now();
             return `<div class="summary-line">📅 ${escapeHtml(formatOccurrence(base, true))}${passed ? ' <span class="dim">(passed)</span>' : ''}</div>` +
@@ -1933,6 +1943,84 @@
     $('scheduleDate').addEventListener('change', scheduleChanged);
     $('scheduleTime').addEventListener('change', scheduleChanged);
     $('alarmEnabled').addEventListener('change', scheduleChanged);
+
+    /* ---- email notification (sent by the GitHub Action, see EMAIL-SETUP.md) ---- */
+    const EMAIL_KEY = 'remindate.emailAddress.v1';
+    const EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']{2,}$/;
+    const defaultEmail = () => localStorage.getItem(EMAIL_KEY) || '';
+
+    function openEmailModal() {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        $('emailAddress').value = note.emailTo || defaultEmail();
+        $('emailTurnOff').hidden = !note.emailEnabled;
+        const sync = githubConfigured();
+        const notes = [];
+        if (!note.scheduledAt) notes.push('This note has no date yet: pick a date and time in the Scheduled card.');
+        if (!sync) notes.push('Emails are sent via GitHub using your synced notes, so turn on <b>GitHub Sync</b> (with automatic sync).');
+        else if (!githubConfig.autoSync) notes.push('Turn on <b>automatic sync</b> in GitHub Sync settings, or press “Sync now” after changes, so GitHub knows about this note.');
+        notes.push('One-time setup: the email workflow must be set up on GitHub (see <b>EMAIL-SETUP.md</b> in the Remindate folder). Emails can arrive a few minutes late.');
+        $('emailStatus').innerHTML = notes.map((t) => `<div>• ${t}</div>`).join('');
+        openModal('emailModal');
+        setTimeout(() => $('emailAddress').focus(), 30);
+    }
+
+    function closeEmailModal() {
+        $('emailModal').classList.remove('active');
+        const note = noteById(state.currentNoteId);
+        $('emailEnabled').checked = !!(note && note.emailEnabled);
+    }
+
+    function saveEmailSettings() {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        const address = $('emailAddress').value.trim();
+        if (!EMAIL_RE.test(address)) {
+            toast('Please enter a valid email address');
+            $('emailAddress').focus();
+            return;
+        }
+        if ($('emailRemember').checked) localStorage.setItem(EMAIL_KEY, address);
+        note.emailTo = address;
+        note.emailEnabled = true;
+        touch(note);
+        closeEmailModal();
+        updateScheduleUi(note);
+        renderTree();
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
+        toast(`Email notification on → ${address}`);
+    }
+
+    $('emailEnabled').addEventListener('change', () => {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        if ($('emailEnabled').checked) {
+            const address = note.emailTo || defaultEmail();
+            if (!address) { openEmailModal(); return; }   // ask for the address first
+            note.emailTo = address;
+            note.emailEnabled = true;
+        } else {
+            note.emailEnabled = false;
+        }
+        touch(note);
+        updateScheduleUi(note);
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
+    });
+    $('emailSettingsLink').addEventListener('click', openEmailModal);
+    $('emailSave').addEventListener('click', saveEmailSettings);
+    $('emailAddress').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveEmailSettings(); } });
+    $('emailCancel').addEventListener('click', closeEmailModal);
+    $('emailClose').addEventListener('click', closeEmailModal);
+    $('emailBackdrop').addEventListener('click', closeEmailModal);
+    $('emailTurnOff').addEventListener('click', () => {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        note.emailEnabled = false;
+        touch(note);
+        closeEmailModal();
+        updateScheduleUi(note);
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
+    });
     $('repeatCount').addEventListener('input', () => {
         $('repeatCountLabel').textContent = $('repeatCount').value;
     });
@@ -1947,6 +2035,7 @@
         if (!note) return;
         note.scheduledAt = null;
         note.alarmEnabled = false;
+        note.emailEnabled = false;
         note.repeatWeekdays = [];
         note.repeatMode = 'none';
         note.repeatEndDate = '';
@@ -2040,7 +2129,7 @@
                         <button class="folder-action-btn folder-delete note-delete" data-note-id="${n.id}" title="Delete note">Delete</button>
                     </span>
                     <div>${escapeHtml(n.title.trim() || 'Untitled')}</div>
-                    <div class="calendar-note-time">${formatTime(n.scheduledAt)}${n.alarmEnabled ? ' · alarm' : ''}${isRecurring(n) ? ' · ' + repeatSummary(n) : ''}</div>
+                    <div class="calendar-note-time">${formatTime(n.scheduledAt)}${n.alarmEnabled ? ' · alarm' : ''}${n.emailEnabled ? ' · email' : ''}${isRecurring(n) ? ' · ' + repeatSummary(n) : ''}</div>
                 </div>`).join('')
             : '<div class="calendar-hint">No notes scheduled for this day.</div>');
     }
@@ -2167,6 +2256,7 @@
         if (choice === 'alt') {
             note.scheduledAt = null;
             note.alarmEnabled = false;
+            note.emailEnabled = false;
             note.repeatWeekdays = [];
             note.repeatMode = 'none';
             note.repeatEndDate = '';
@@ -2989,6 +3079,7 @@
     function closeModals() {
         if (dialogResolve) { finishDialog(false); return; }
         if ($('voiceModal').classList.contains('active')) resetVoiceModal();
+        if ($('emailModal').classList.contains('active')) closeEmailModal();
         document.querySelectorAll('.modal.active').forEach((m) => m.classList.remove('active'));
     }
 

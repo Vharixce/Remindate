@@ -1,0 +1,52 @@
+name: Remindate email reminders
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'   # every 10 minutes (GitHub may run it a few minutes late)
+  workflow_dispatch:          # "Run workflow" button for testing
+
+permissions:
+  contents: write             # only used for the keep-alive commit below
+
+concurrency:
+  group: remindate-email-reminders
+  cancel-in-progress: false
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install nodemailer
+        run: npm install --no-save --no-package-lock --no-audit --no-fund nodemailer@6
+
+      - name: Send due reminders
+        run: node scripts/email-reminders.mjs
+        env:
+          TZ: ${{ vars.REMINDATE_TIMEZONE || 'Europe/Amsterdam' }}
+          DATA_TOKEN: ${{ secrets.REMINDATE_DATA_TOKEN }}
+          DATA_REPO: ${{ vars.REMINDATE_DATA_REPO || 'Vharixce/Remindate-DATA-PRIVATE' }}
+          DATA_PATH: ${{ vars.REMINDATE_DATA_PATH || 'notes.json' }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          APP_URL: ${{ vars.REMINDATE_APP_URL || 'https://vharixce.github.io/Remindate/' }}
+
+      # GitHub pauses scheduled workflows in repos without activity for 60 days.
+      # This makes a tiny empty commit every ~50 days so the reminders keep running.
+      - name: Keep the schedule alive
+        if: github.event_name == 'schedule'
+        run: |
+          last=$(git log -1 --format=%ct)
+          now=$(date +%s)
+          if [ $(( (now - last) / 86400 )) -ge 50 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit --allow-empty -m "Keep Remindate email reminders active"
+            git push
+          fi

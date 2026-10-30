@@ -105,7 +105,14 @@
                                 <input type="date" id="scheduleDate" aria-label="Date">
                                 <input type="time" id="scheduleTime" step="1" aria-label="Time">
                             </div>
-                            <label class="check-row"><input type="checkbox" id="alarmEnabled"> Alarm</label>
+                            <div class="check-row-group">
+                                <label class="check-row"><input type="checkbox" id="alarmEnabled"> Alarm</label>
+                                <span class="check-row email-row">
+                                    <input type="checkbox" id="emailEnabled" aria-label="Send Email Notification">
+                                    <button type="button" class="link-btn" id="emailSettingsLink" title="Set the email address">Send Email Notification</button>
+                                    <span class="email-to" id="emailToLabel"></span>
+                                </span>
+                            </div>
                             <div class="step-row">
                                 <span title="How many extra times the alarm rings (snooze)">Alarm repeats</span>
                                 <input type="range" id="repeatCount" min="0" max="10" value="0">
@@ -370,6 +377,29 @@
                 <input type="file" id="voiceFile" accept="audio/*" multiple hidden>
                 <button class="btn" id="voiceCancel" type="button">Cancel</button>
                 <button class="btn btn-primary" id="voiceInsert" type="button" disabled>Insert</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Email notification -->
+    <div class="modal" id="emailModal">
+        <div class="modal-backdrop" id="emailBackdrop"></div>
+        <div class="modal-content email-modal">
+            <div class="modal-header">
+                <div>Email notification</div>
+                <button class="icon-btn" id="emailClose" title="Close">&times;</button>
+            </div>
+            <div class="email-help">Get an email at the scheduled time of this note (and on every repeat).</div>
+            <div class="plan-row">
+                <label for="emailAddress">Email address</label>
+                <input type="email" id="emailAddress" placeholder="you@example.com" autocomplete="email">
+            </div>
+            <label class="check-row"><input type="checkbox" id="emailRemember" checked> Use this address for other notes too</label>
+            <div class="email-status" id="emailStatus"></div>
+            <div class="modal-actions">
+                <button class="btn" id="emailTurnOff" type="button">Turn off</button>
+                <button class="btn" id="emailCancel" type="button">Cancel</button>
+                <button class="btn btn-primary" id="emailSave" type="button">Save</button>
             </div>
         </div>
     </div>
