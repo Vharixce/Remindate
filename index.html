@@ -107,7 +107,7 @@
                             </div>
                             <label class="check-row"><input type="checkbox" id="alarmEnabled"> Alarm</label>
                             <div class="step-row">
-                                <span>Repeat</span>
+                                <span title="How many extra times the alarm rings (snooze)">Alarm repeats</span>
                                 <input type="range" id="repeatCount" min="0" max="10" value="0">
                                 <span class="step-value" id="repeatCountLabel">0</span>
                             </div>
@@ -116,7 +116,28 @@
                                 <input type="range" id="snoozeMinutes" min="1" max="60" value="5">
                                 <span class="step-value" id="snoozeMinutesLabel">5</span>
                             </div>
-                            <button class="btn alarm-sound-settings-btn" id="openAlarmSoundSettings" type="button">Alarm Sound Settings</button>
+                            <div class="schedule-section">
+                                <div class="plan-row">
+                                    <label for="edRepeatMode">Repeat</label>
+                                    <select id="edRepeatMode" class="repeat-select"></select>
+                                </div>
+                                <div id="edWeeklyOptions" class="ed-weekly" hidden>
+                                    <div class="advanced-label">Repeat on</div>
+                                    <div class="weekday-options" id="edWeekdays"></div>
+                                </div>
+                                <div class="plan-row" id="edRepeatEndRow" hidden>
+                                    <label for="edRepeatEnd">End date (optional)</label>
+                                    <input type="date" id="edRepeatEnd">
+                                </div>
+                                <div class="skipped-row" id="edSkippedRow" hidden>
+                                    <div class="advanced-label">Skipped days <span class="skipped-hint">(click ✕ to bring a day back)</span></div>
+                                    <div class="skipped-list" id="edSkipped"></div>
+                                </div>
+                            </div>
+                            <div class="schedule-summary" id="scheduleSummary"></div>
+                            <div class="schedule-buttons">
+                                <button class="btn alarm-sound-settings-btn" id="openAlarmSoundSettings" type="button">Alarm Sound Settings</button>
+                            </div>
                         </div>
                     </div>
 
@@ -245,7 +266,7 @@
             </div>
             <label class="check-row"><input type="checkbox" id="planFromTreeAlarm"> Alarm</label>
             <div class="step-row">
-                <span>Repeat</span>
+                <span title="How many extra times the alarm rings (snooze)">Alarm repeats</span>
                 <input type="range" id="planFromTreeRepeat" min="0" max="10" value="0">
                 <span class="step-value" id="planFromTreeRepeatLabel">0</span>
             </div>
@@ -256,9 +277,15 @@
             </div>
             <button class="btn advanced-toggle" id="advancedSettingsToggle" type="button" aria-expanded="false">Advanced settings</button>
             <div id="advancedSettings" class="advanced-settings" hidden>
-                <div class="advanced-label">Repeat on</div>
-                <div class="weekday-options" id="weekdayOptions"></div>
-                <div class="plan-row"><label for="repeatEndDate">End date</label><input type="date" id="repeatEndDate"></div>
+                <div class="plan-row">
+                    <label for="repeatMode">Repeat</label>
+                    <select id="repeatMode" class="repeat-select"></select>
+                </div>
+                <div id="weeklyOptions" hidden>
+                    <div class="advanced-label">Repeat on</div>
+                    <div class="weekday-options" id="weekdayOptions"></div>
+                </div>
+                <div class="plan-row" id="repeatEndRow"><label for="repeatEndDate">End date (optional)</label><input type="date" id="repeatEndDate"></div>
             </div>
             <div class="modal-actions">
                 <button class="btn" id="planFromTreeCancel">Cancel</button>

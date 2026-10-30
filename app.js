@@ -143,6 +143,7 @@
         note.alarmRepeatCount = Number(note.alarmRepeatCount) || 0;
         note.alarmSnoozeMinutes = Number(note.alarmSnoozeMinutes) || 5;
         note.repeatWeekdays = Array.isArray(note.repeatWeekdays) ? note.repeatWeekdays : [];
+        if (!REPEAT_MODES.includes(note.repeatMode)) note.repeatMode = note.repeatWeekdays.length ? 'weekly' : 'none';
         note.repeatEndDate = note.repeatEndDate || '';
         note.canvasBackground = note.canvasBackground || DEFAULT_CANVAS_BG;
         note.strokes = Array.isArray(note.strokes) ? note.strokes : [];
@@ -231,8 +232,64 @@
      * repeatWeekdays = [0..6] (0 = Monday) on which the note repeats,
      * from the start date up to and including repeatEndDate (empty = no end).
      */
+    // none | weekly (on repeatWeekdays) | monthlyDate (e.g. every 15th) |
+    // monthlyWeekday (e.g. every 2nd Tuesday) | monthlyLastWeekday (e.g. last Friday) | yearly
+    const REPEAT_MODES = ['none', 'weekly', 'monthlyDate', 'monthlyWeekday', 'monthlyLastWeekday', 'yearly'];
+
+    function repeatModeOf(note) {
+        const mode = REPEAT_MODES.includes(note.repeatMode) ? note.repeatMode : 'none';
+        if (mode === 'weekly' || mode === 'none') {
+            return Array.isArray(note.repeatWeekdays) && note.repeatWeekdays.length ? 'weekly' : 'none';
+        }
+        return mode;
+    }
+
     function isRecurring(note) {
-        return Array.isArray(note.repeatWeekdays) && note.repeatWeekdays.length > 0;
+        return repeatModeOf(note) !== 'none';
+    }
+
+    const daysInMonth = (d) => new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+    const nthOfMonth = (d) => Math.ceil(d.getDate() / 7);              // 1..5
+    const isLastWeekdayOfMonth = (d) => d.getDate() + 7 > daysInMonth(d);
+
+    // Does a repeating note (started on `base`) fall on `day`?
+    function repeatMatches(note, base, day) {
+        switch (repeatModeOf(note)) {
+            case 'weekly':
+                return note.repeatWeekdays.includes((day.getDay() + 6) % 7);
+            case 'monthlyDate': // the 31st becomes the last day in shorter months
+                return day.getDate() === Math.min(base.getDate(), daysInMonth(day));
+            case 'monthlyWeekday':
+                return day.getDay() === base.getDay() && nthOfMonth(day) === nthOfMonth(base);
+            case 'monthlyLastWeekday':
+                return day.getDay() === base.getDay() && isLastWeekdayOfMonth(day);
+            case 'yearly': // 29 February becomes 28 February in other years
+                return day.getMonth() === base.getMonth() && day.getDate() === Math.min(base.getDate(), daysInMonth(day));
+            default:
+                return false;
+        }
+    }
+
+    function ordinal(n) {
+        const s = ['th', 'st', 'nd', 'rd'];
+        const v = n % 100;
+        return n + (s[(v - 20) % 10] || s[v] || s[0]);
+    }
+
+    // Human readable label for a repeat mode, based on the start date
+    function repeatLabel(mode, base, weekdays) {
+        const wd = WEEKDAY_FULL[(base.getDay() + 6) % 7];
+        switch (mode) {
+            case 'weekly':
+                return weekdays && weekdays.length
+                    ? `Weekly on ${weekdays.slice().sort().map((i) => WEEKDAY_FULL[i].slice(0, 3)).join(', ')}`
+                    : 'Weekly on selected days';
+            case 'monthlyDate': return `Monthly on the ${ordinal(base.getDate())}`;
+            case 'monthlyWeekday': return `Monthly on the ${ordinal(nthOfMonth(base))} ${wd}`;
+            case 'monthlyLastWeekday': return `Monthly on the last ${wd}`;
+            case 'yearly': return `Every year on ${base.getDate()} ${MONTHS[base.getMonth()]}`;
+            default: return 'Does not repeat';
+        }
     }
 
     // Returns the occurrence (Date with the note's time) on `day`, or null.
@@ -247,7 +304,7 @@
         const key = dayKey(day);
         if (key < dayKey(base)) return null;
         if (note.repeatEndDate && key > note.repeatEndDate) return null;
-        if (!note.repeatWeekdays.includes((day.getDay() + 6) % 7)) return null;
+        if (!repeatMatches(note, base, day)) return null;
         return occ;
     }
 
@@ -270,7 +327,7 @@
         if (!base) return null;
         if (!isRecurring(note)) return base.getTime() > time ? base : null;
         const from = new Date(Math.max(time, base.getTime() - 1));
-        for (let i = 0; i < 400; i++) {
+        for (let i = 0; i < 800; i++) {
             const occ = occurrenceOn(note, new Date(from.getFullYear(), from.getMonth(), from.getDate() + i));
             if (occ && occ.getTime() > time) return occ;
         }
@@ -282,8 +339,13 @@
 
     function repeatSummary(note) {
         if (!isRecurring(note)) return '';
-        const days = note.repeatWeekdays.slice().sort().map((i) => WEEKDAY_FULL[i].slice(0, 2)).join(' ');
-        return `repeats ${days}${note.repeatEndDate ? ` until ${formatDateTime(note.repeatEndDate + 'T00:00:00').slice(0, -6)}` : ''}`;
+        const base = parseDate(note.scheduledAt);
+        if (!base) return '';
+        const mode = repeatModeOf(note);
+        const what = mode === 'weekly'
+            ? `repeats ${note.repeatWeekdays.slice().sort().map((i) => WEEKDAY_FULL[i].slice(0, 2)).join(' ')}`
+            : repeatLabel(mode, base).replace(/^Monthly/, 'monthly').replace(/^Every year/, 'every year');
+        return `${what}${note.repeatEndDate ? ` until ${formatDateTime(note.repeatEndDate + 'T00:00:00').slice(0, -6)}` : ''}`;
     }
 
     const noteById = (id) => state.notes.find((n) => n.id === id) || null;
@@ -613,6 +675,10 @@
 
     function selectNote(id) {
         flushEditor();
+        if (state.prefs.scheduleCollapsed) {
+            state.prefs.scheduleCollapsed = false;   // always show when/how the note is scheduled
+            savePrefs();
+        }
         state.currentNoteId = id;
         state.currentFolderId = noteById(id)?.folderId || null;
         renderTree();
@@ -641,6 +707,7 @@
             alarmRepeatCount: 0,
             alarmSnoozeMinutes: 5,
             repeatWeekdays: [],
+            repeatMode: 'none',
             repeatEndDate: '',
             canvasBackground: DEFAULT_CANVAS_BG,
             html: '',
@@ -1705,6 +1772,7 @@
             $('scheduleDate').disabled = true;
             $('scheduleTime').disabled = true;
             $('alarmEnabled').disabled = true;
+            updateEditorRepeatUi(null);
             body.style.opacity = '0.5';
             applyScheduleCollapse();
             return;
@@ -1725,14 +1793,108 @@
         $('snoozeMinutes').value = note.alarmSnoozeMinutes;
         $('repeatCountLabel').textContent = note.alarmRepeatCount;
         $('snoozeMinutesLabel').textContent = note.alarmSnoozeMinutes;
+        updateEditorRepeatUi(note);
         applyScheduleCollapse();
     }
+
+    /* ---- repeat settings + overview inside the note's Scheduled card ---- */
+
+    $('edWeekdays').innerHTML = WEEKDAY_SHORT.map((letter, index) =>
+        `<label class="weekday-chip" title="${WEEKDAY_FULL[index]}"><input type="checkbox" value="${index}" aria-label="${WEEKDAY_FULL[index]}"><span>${letter}</span></label>`
+    ).join('');
+
+    function availableRepeatModes(base) {
+        const modes = ['none', 'weekly', 'monthlyDate', 'monthlyWeekday'];
+        if (isLastWeekdayOfMonth(base)) modes.push('monthlyLastWeekday');
+        modes.push('yearly');
+        return modes;
+    }
+
+    function formatOccurrence(d, withYear) {
+        return `${WEEKDAY_FULL[(d.getDay() + 6) % 7].slice(0, 3)} ${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)}` +
+            `${withYear || d.getFullYear() !== new Date().getFullYear() ? ' ' + d.getFullYear() : ''} at ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    }
+
+    function updateEditorRepeatUi(note) {
+        const select = $('edRepeatMode');
+        const base = note ? parseDate(note.scheduledAt) : null;
+        const ref = base || new Date();
+        const mode = base ? repeatModeOf(note) : 'none';
+        const weekdays = note && mode === 'weekly' ? note.repeatWeekdays : [];
+        const modes = availableRepeatModes(ref);
+        if (!modes.includes(mode)) modes.splice(modes.length - 1, 0, mode);
+        select.innerHTML = modes.map((m) => `<option value="${m}">${escapeHtml(repeatLabel(m, ref, weekdays))}</option>`).join('');
+        select.value = mode;
+        select.disabled = !base;
+        select.title = base ? '' : 'Pick a date first';
+        $('edWeekdays').querySelectorAll('input').forEach((input) => {
+            input.checked = weekdays.includes(Number(input.value));
+        });
+        $('edWeeklyOptions').hidden = mode !== 'weekly';
+        $('edRepeatEndRow').hidden = mode === 'none';
+        $('edRepeatEnd').value = (note && note.repeatEndDate) || '';
+        $('edRepeatEnd').min = base ? dayKey(base) : '';
+
+        const skipped = note && mode !== 'none' ? (note.skipDates || []).slice().sort() : [];
+        $('edSkippedRow').hidden = !skipped.length;
+        $('edSkipped').innerHTML = skipped.map((key) => {
+            const d = keyToDate(key);
+            return `<span class="skipped-chip">${WEEKDAY_FULL[(d.getDay() + 6) % 7].slice(0, 3)} ${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)} ${d.getFullYear()}` +
+                `<button type="button" class="skipped-remove" data-key="${key}" title="Bring this day back">✕</button></span>`;
+        }).join('');
+
+        $('scheduleSummary').innerHTML = scheduleSummaryHtml(note);
+    }
+
+    // "When will this note show up?" overview
+    function scheduleSummaryHtml(note) {
+        if (!note) return '';
+        const base = parseDate(note.scheduledAt);
+        if (!base) return '<div class="summary-line dim">Not in the calendar yet. Pick a date to schedule this note.</div>';
+        const alarm = note.alarmEnabled
+            ? `🔔 Alarm on${note.alarmRepeatCount ? `, rings ${note.alarmRepeatCount + 1}× (every ${note.alarmSnoozeMinutes} min)` : ''}`
+            : '🔕 No alarm';
+        if (!isRecurring(note)) {
+            const passed = base.getTime() < Date.now();
+            return `<div class="summary-line">📅 ${escapeHtml(formatOccurrence(base, true))}${passed ? ' <span class="dim">(passed)</span>' : ''}</div>` +
+                `<div class="summary-line dim">${alarm}</div>`;
+        }
+        const next = [];
+        let t = Date.now();
+        for (let i = 0; i < 4; i++) {
+            const occ = nextOccurrence(note, t);
+            if (!occ) break;
+            next.push(occ);
+            t = occ.getTime();
+        }
+        const until = note.repeatEndDate ? ` until ${formatDateTime(note.repeatEndDate + 'T00:00:00').slice(0, -6)}` : ', no end date';
+        return `<div class="summary-line">↻ ${escapeHtml(repeatLabel(repeatModeOf(note), base, note.repeatWeekdays))}${escapeHtml(until)}</div>` +
+            `<div class="summary-line dim">Starts ${escapeHtml(formatOccurrence(base, true))} · ${alarm}</div>` +
+            (next.length
+                ? `<div class="summary-line">Next: ${next.map((d) => `<span class="next-chip">${escapeHtml(formatOccurrence(d))}</span>`).join(' ')}</div>`
+                : '<div class="summary-line dim">No upcoming dates (the repeat has ended).</div>');
+    }
+
+    $('edRepeatMode').addEventListener('change', scheduleChanged);
+    $('edWeekdays').addEventListener('change', scheduleChanged);
+    $('edRepeatEnd').addEventListener('change', scheduleChanged);
+    $('edSkipped').addEventListener('click', (e) => {
+        const btn = e.target.closest('.skipped-remove');
+        const note = noteById(state.currentNoteId);
+        if (!btn || !note) return;
+        note.skipDates = (note.skipDates || []).filter((k) => k !== btn.dataset.key);
+        resetAlarmRuntime(note);
+        touch(note);
+        updateScheduleUi(note);
+        renderTree();
+        if (state.prefs.activeTab === 'calendar') renderCalendar();
+    });
 
     function scheduleChanged() {
         const note = noteById(state.currentNoteId);
         if (!note) return;
         const date = $('scheduleDate').value;
-        const time = $('scheduleTime').value || '00:00:00';
+        const time = $('scheduleTime').value || '09:00:00'; // only a date picked: default to 9 in the morning
 
         if (!date) {
             note.scheduledAt = null;
@@ -1745,8 +1907,25 @@
         note.alarmEnabled = $('alarmEnabled').checked;
         note.alarmRepeatCount = Number($('repeatCount').value);
         note.alarmSnoozeMinutes = Number($('snoozeMinutes').value);
+
+        const base = parseDate(note.scheduledAt);
+        let mode = base ? ($('edRepeatMode').value || 'none') : 'none';
+        if (!REPEAT_MODES.includes(mode)) mode = 'none';
+        if (mode === 'monthlyLastWeekday' && base && !isLastWeekdayOfMonth(base)) mode = 'monthlyWeekday';
+        let weekdays = [...$('edWeekdays').querySelectorAll('input:checked')].map((el) => Number(el.value));
+        if (mode === 'weekly' && !weekdays.length) weekdays = [(base.getDay() + 6) % 7];
+        let end = mode === 'none' ? '' : $('edRepeatEnd').value;
+        if (end && base && end < dayKey(base)) {
+            toast('End date is before the start date');
+            end = '';
+        }
+        note.repeatMode = mode;
+        note.repeatWeekdays = mode === 'weekly' ? weekdays : [];
+        note.repeatEndDate = end;
+
         resetAlarmRuntime(note);
         touch(note);
+        updateScheduleUi(note);
         renderTree();
         if (state.prefs.activeTab === 'calendar') renderCalendar();
     }
@@ -1769,7 +1948,9 @@
         note.scheduledAt = null;
         note.alarmEnabled = false;
         note.repeatWeekdays = [];
+        note.repeatMode = 'none';
         note.repeatEndDate = '';
+        note.skipDates = [];
         resetAlarmRuntime(note);
         touch(note);
         updateScheduleUi(note);
@@ -1824,7 +2005,7 @@
                 (isToday ? ' today' : '') + (isSelected ? ' selected' : '');
             cell.dataset.date = dayKey(day);
             const chips = scheduled.slice(0, 2).map((n) =>
-                `<div class="calendar-chip${isRecurring(n) ? ' recurring' : ''}" draggable="true" data-note-id="${n.id}" title="${escapeHtml(n.title.trim() || 'Untitled')} – drag to another day">${escapeHtml(n.title.trim() || 'Untitled')}</div>`
+                `<div class="calendar-chip${isRecurring(n) ? ' recurring' : ''}" draggable="true" data-note-id="${n.id}" title="${escapeHtml(n.title.trim() || 'Untitled')} – click to open, drag to another day">${escapeHtml(n.title.trim() || 'Untitled')}</div>`
             ).join('');
             cell.innerHTML = `<div class="calendar-day-number">${day.getDate()}</div>` +
                 (scheduled.length
@@ -1865,6 +2046,12 @@
     }
 
     $('calendarGrid').addEventListener('click', (e) => {
+        const chip = e.target.closest('.calendar-chip');
+        if (chip) {
+            setTab('note');
+            selectNote(chip.dataset.noteId);
+            return;
+        }
         const cell = e.target.closest('.calendar-day');
         if (!cell) return;
         const [y, m, d] = cell.dataset.date.split('-').map(Number);
@@ -1981,6 +2168,7 @@
             note.scheduledAt = null;
             note.alarmEnabled = false;
             note.repeatWeekdays = [];
+            note.repeatMode = 'none';
             note.repeatEndDate = '';
             note.skipDates = [];
         } else {
@@ -2022,6 +2210,38 @@
         $('advancedSettingsToggle').setAttribute('aria-expanded', String(!panel.hidden));
     });
 
+    // Fill the Repeat dropdown with options that match the chosen date
+    function refreshRepeatOptions(selected) {
+        const select = $('repeatMode');
+        const value = selected || select.value || 'none';
+        const date = $('planFromTreeDate').value;
+        const base = date ? keyToDate(date) : new Date();
+        const checked = [...$('weekdayOptions').querySelectorAll('input:checked')].map((el) => Number(el.value));
+        const modes = ['none', 'weekly', 'monthlyDate', 'monthlyWeekday'];
+        if (isLastWeekdayOfMonth(base)) modes.push('monthlyLastWeekday');
+        modes.push('yearly');
+        let pick = value;
+        if (!modes.includes(pick)) pick = pick === 'monthlyLastWeekday' ? 'monthlyWeekday' : 'none';
+        select.innerHTML = modes.map((m) =>
+            `<option value="${m}">${escapeHtml(repeatLabel(m, base, checked))}</option>`).join('');
+        select.value = pick;
+        $('weeklyOptions').hidden = pick !== 'weekly';
+        $('repeatEndRow').hidden = pick === 'none';
+    }
+
+    $('repeatMode').addEventListener('change', () => {
+        if ($('repeatMode').value === 'weekly' && !$('weekdayOptions').querySelector('input:checked')) {
+            // start with the weekday of the chosen date
+            const date = $('planFromTreeDate').value;
+            const idx = ((date ? keyToDate(date) : new Date()).getDay() + 6) % 7;
+            const box = $('weekdayOptions').querySelector(`input[value="${idx}"]`);
+            if (box) box.checked = true;
+        }
+        refreshRepeatOptions($('repeatMode').value);
+    });
+    $('planFromTreeDate').addEventListener('change', () => refreshRepeatOptions());
+    $('weekdayOptions').addEventListener('change', () => refreshRepeatOptions());
+
     function openPlanFromTreeModal(noteId, day) {
         const note = noteById(noteId);
         if (!note) return;
@@ -2047,6 +2267,7 @@
             input.checked = (note.repeatWeekdays || []).includes(Number(input.value));
         });
         $('repeatEndDate').value = note.repeatEndDate || '';
+        refreshRepeatOptions(repeatModeOf(note));
         planModal.classList.add('active');
     }
 
@@ -2087,8 +2308,15 @@
         note.alarmEnabled = $('planFromTreeAlarm').checked;
         note.alarmRepeatCount = Number($('planFromTreeRepeat').value);
         note.alarmSnoozeMinutes = Number($('planFromTreeSnooze').value);
-        note.repeatWeekdays = [...$('weekdayOptions').querySelectorAll('input:checked')].map((el) => Number(el.value));
-        note.repeatEndDate = $('repeatEndDate').value;
+        const mode = $('repeatMode').value;
+        const weekdays = [...$('weekdayOptions').querySelectorAll('input:checked')].map((el) => Number(el.value));
+        if (mode === 'weekly' && !weekdays.length) {
+            toast('Pick at least one weekday');
+            return;
+        }
+        note.repeatMode = REPEAT_MODES.includes(mode) ? mode : 'none';
+        note.repeatWeekdays = mode === 'weekly' ? weekdays : [];
+        note.repeatEndDate = mode === 'none' ? '' : $('repeatEndDate').value;
         resetAlarmRuntime(note);
         touch(note);
         renderTree();
@@ -2097,7 +2325,8 @@
             renderCalendar();
         }
         closePlanFromTreeModal();
-        toast('Note scheduled');
+        if (note.id === state.currentNoteId) updateScheduleUi(note);
+        toast(isRecurring(note) ? `Scheduled · ${repeatSummary(note)}` : 'Note scheduled');
     });
 
     $('calPrev').addEventListener('click', () => {
