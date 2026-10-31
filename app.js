@@ -916,7 +916,7 @@
 
         $('noteTitle').value = note.title;
         stopVoicePlayback();
-        editorEl.innerHTML = sanitizeHtml(note.html);
+        editorEl.innerHTML = sanitizeHtml(note.html);   // (also turns web addresses into links)
         decorateVoiceChips();
         $('gridType').value = currentGridType(note);
         $('noteFolder').innerHTML = folderOptions(note.folderId);
@@ -978,7 +978,16 @@
     let selectedImg = null;
 
     const RICH_TAGS = new Set(['DIV', 'P', 'BR', 'B', 'STRONG', 'I', 'EM', 'U', 'UL', 'OL', 'LI',
-        'IMG', 'SPAN', 'H1', 'H2', 'H3', 'BLOCKQUOTE']);
+        'IMG', 'SPAN', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'S', 'STRIKE', 'DEL', 'A', 'FONT']);
+    const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i;
+    const SAFE_LINK_RE = /^(https?:\/\/|mailto:)/i;
+
+    function cssColorToHex(value) {
+        const v = String(value || '').trim();
+        if (HEX_COLOR_RE.test(v)) return v.toLowerCase();
+        const m = /^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/i.exec(v);
+        return m ? '#' + [m[1], m[2], m[3]].map((n) => Number(n).toString(16).padStart(2, '0')).join('') : '';
+    }
     const DROP_TAGS = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'TEMPLATE', 'META', 'LINK', 'TITLE', 'svg', 'SVG']);
 
     // Keep only safe, simple formatting + embedded (data:) images
@@ -1003,6 +1012,34 @@
                     child.textContent = `🎤 ${name}`;
                     return;
                 }
+                // <font color> / <span style="color"> → <span style="color:#..."> (text colour)
+                if (child.tagName === 'FONT' || child.tagName === 'SPAN') {
+                    const styleColor = /(?:^|;)\s*color\s*:\s*([^;]+)/i.exec(child.getAttribute('style') || '');
+                    const color = cssColorToHex(child.tagName === 'FONT' ? child.getAttribute('color') : (styleColor && styleColor[1]));
+                    if (!color) { child.replaceWith(...child.childNodes); return; }
+                    const span = doc.createElement('span');
+                    span.setAttribute('style', `color:${color}`);
+                    span.append(...child.childNodes);
+                    child.replaceWith(span);
+                    return;
+                }
+                // strikethrough
+                if (child.tagName === 'STRIKE' || child.tagName === 'DEL') {
+                    const s = doc.createElement('s');
+                    s.append(...child.childNodes);
+                    child.replaceWith(s);
+                    return;
+                }
+                // links: only web and mail links, always opened in a new tab
+                if (child.tagName === 'A') {
+                    const href = (child.getAttribute('href') || '').trim();
+                    if (!SAFE_LINK_RE.test(href)) { child.replaceWith(...child.childNodes); return; }
+                    [...child.attributes].forEach((attr) => child.removeAttribute(attr.name));
+                    child.setAttribute('href', href);
+                    child.setAttribute('target', '_blank');
+                    child.setAttribute('rel', 'noopener noreferrer');
+                    return;
+                }
                 [...child.attributes].forEach((attr) => {
                     const keep = child.tagName === 'IMG' && (attr.name === 'style' || attr.name === 'alt' ||
                         (attr.name === 'src' && /^data:image\/(png|jpe?g|gif|webp);base64,/i.test(attr.value)));
@@ -1016,7 +1053,49 @@
                 }
             });
         })(root);
+        linkifyNode(root);
         return root.innerHTML;
+    }
+
+    /* ---- clickable links ---- */
+    const URL_RE = /\b((?:https?:\/\/|www\.)[^\s<>"']+)/gi;
+
+    function trimUrl(url) {
+        // "see https://x.nl." → leave the final dot/bracket out of the link
+        let u = url.replace(/[.,;:!?'"]+$/, '');
+        if (u.endsWith(')') && !u.includes('(')) u = u.slice(0, -1);
+        return u;
+    }
+
+    // Turn plain-text web addresses inside `root` into <a> links
+    function linkifyNode(root, skipNode) {
+        const doc = root.ownerDocument;
+        const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+        const targets = [];
+        while (walker.nextNode()) {
+            const t = walker.currentNode;
+            if (t === skipNode || t.parentElement.closest('a, .voice-chip, span[data-voice]')) continue;
+            URL_RE.lastIndex = 0;
+            if (URL_RE.test(t.data)) targets.push(t);
+        }
+        targets.forEach((t) => {
+            const frag = doc.createDocumentFragment();
+            let last = 0;
+            t.data.replace(URL_RE, (match, _g, offset) => {
+                const url = trimUrl(match);
+                frag.append(t.data.slice(last, offset));
+                const a = doc.createElement('a');
+                a.href = /^www\./i.test(url) ? `https://${url}` : url;
+                a.target = '_blank';
+                a.rel = 'noopener noreferrer';
+                a.textContent = url;
+                frag.append(a);
+                last = offset + url.length;
+                return match;
+            });
+            frag.append(t.data.slice(last));
+            t.replaceWith(frag);
+        });
     }
 
     function textToHtml(text) {
@@ -1057,6 +1136,94 @@
     }
 
     editorEl.addEventListener('input', markTextChanged);
+
+    // A web address becomes a link as soon as you type a space or Enter after it
+    editorEl.addEventListener('input', (e) => {
+        if (!((e.inputType === 'insertText' && e.data === ' ') || e.inputType === 'insertParagraph')) return;
+        const sel = window.getSelection();
+        if (!sel.rangeCount) return;
+        let node = sel.anchorNode;
+        // after Enter the caret is on the new line: look at the end of the previous line
+        if (e.inputType === 'insertParagraph') {
+            const block = (node.nodeType === 1 ? node : node.parentElement).closest('div, p, li');
+            const prev = block && block.previousSibling;
+            if (!prev) return;
+            linkifyNode(prev.nodeType === 3 ? prev.parentNode : prev);
+            return;
+        }
+        if (!node || node.nodeType !== 3 || node.parentElement.closest('a')) return;
+        const offset = sel.anchorOffset;
+        const before = node.data.slice(0, offset - 1);
+        const m = /((?:https?:\/\/|www\.)[^\s<>"']+)$/i.exec(before);
+        if (!m) return;
+        const url = trimUrl(m[1]);
+        const start = before.length - m[1].length;
+        const range = document.createRange();
+        range.setStart(node, start);
+        range.setEnd(node, start + url.length);
+        const a = document.createElement('a');
+        a.href = /^www\./i.test(url) ? `https://${url}` : url;
+        a.target = '_blank';
+        a.rel = 'noopener noreferrer';
+        range.surroundContents(a);
+        // keep typing after the link, not inside it
+        const after = a.nextSibling;
+        const caret = document.createRange();
+        if (after && after.nodeType === 3) caret.setStart(after, Math.min(after.length, 1 + (m[1].length - url.length)));
+        else caret.setStartAfter(a);
+        caret.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(caret);
+        markTextChanged();
+    });
+    editorEl.addEventListener('blur', () => {
+        const before = editorEl.innerHTML;
+        linkifyNode(editorEl);
+        if (editorEl.innerHTML !== before) markTextChanged();
+    });
+
+    /* ---- text colours ---- */
+    const TEXT_COLORS = [
+        ['', 'Default colour'],
+        ['#ffadad', 'Pastel red'], ['#ffd6a5', 'Pastel orange'], ['#fdffb6', 'Pastel yellow'],
+        ['#caffbf', 'Pastel green'], ['#a0c4ff', 'Pastel blue'], ['#d4b5ff', 'Pastel purple'],
+        ['#000000', 'Black']
+    ];
+    $('textColors').innerHTML = TEXT_COLORS.map(([c, name]) =>
+        `<button type="button" class="text-color${c ? '' : ' reset'}" data-text-color="${c}" title="${name}" style="${c ? `background:${c}` : ''}">${c ? '' : 'A'}</button>`
+    ).join('');
+
+    function applyTextColor(color) {
+        if (!noteById(state.currentNoteId)) return;
+        editorEl.focus();
+        try { document.execCommand('styleWithCSS', false, false); } catch (_) {}
+        if (color) {
+            document.execCommand('foreColor', false, color);
+        } else {
+            // back to the normal colour: colour with a marker, then remove those colour tags
+            const MARK = '#010203';
+            document.execCommand('foreColor', false, MARK);
+            editorEl.querySelectorAll('font[color], span[style*="color"]').forEach((el) => {
+                const c = el.tagName === 'FONT' ? el.getAttribute('color') : cssColorToHex(el.style.color);
+                if (cssColorToHex(c) !== MARK) return;
+                el.querySelectorAll('font[color], span[style*="color"]').forEach((inner) => inner.replaceWith(...inner.childNodes));
+                el.replaceWith(...el.childNodes);
+            });
+        }
+        markTextChanged();
+    }
+
+    $('textColors').addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-text-color]');
+        if (btn) applyTextColor(btn.dataset.textColor);
+    });
+    editorEl.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'x') {
+            e.preventDefault();
+            document.execCommand('strikeThrough', false, null);
+            markTextChanged();
+        }
+    });
 
     // Typing "1. " or "- " / "* " at the start of a line turns it into a list (like Word)
     editorEl.addEventListener('input', (e) => {
@@ -1239,6 +1406,12 @@
 
     editorEl.addEventListener('click', (e) => {
         if (e.target.closest('.voice-chip')) { handleVoiceChipClick(e); return; }
+        const link = e.target.closest('a[href]');
+        if (link && editorEl.contains(link) && !window.getSelection().toString()) {
+            e.preventDefault();
+            if (SAFE_LINK_RE.test(link.getAttribute('href'))) window.open(link.getAttribute('href'), '_blank', 'noopener');
+            return;
+        }
         const img = e.target.closest('img');
         selectImage(img && editorEl.contains(img) ? img : null);
     });

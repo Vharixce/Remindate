@@ -1484,3 +1484,25 @@ body.voice-dragging, body.voice-dragging * { cursor: grabbing !important; user-s
 .rich-editor ul ul { list-style: circle; }
 .rich-editor ol ol { list-style: lower-alpha; }
 .rich-editor li { margin: 2px 0; }
+
+/* text colours, strikethrough, links */
+.text-colors { display: inline-flex; align-items: center; gap: 4px; padding: 0 6px; border-left: 1px solid var(--border); border-right: 1px solid var(--border); }
+.text-color {
+    width: 20px; height: 20px; border-radius: 50%; padding: 0; cursor: pointer;
+    border: 2px solid var(--border); flex-shrink: 0;
+}
+.text-color:hover { transform: scale(1.15); border-color: var(--text); }
+.text-color.reset {
+    background: var(--card); color: var(--text); font-size: 11px; font-weight: 700; line-height: 1;
+    display: inline-flex; align-items: center; justify-content: center;
+}
+.text-color[data-text-color="#000000"] { border-color: #6b7280; }
+.rich-editor a { color: #93c5fd; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.rich-editor a:hover { color: #bfdbfe; }
+.rich-editor s, .rich-editor strike { text-decoration-thickness: 1.5px; }
+/* black text would vanish on the dark background, so it gets a light marker behind it */
+.rich-editor span[style*="color:#000000"], .rich-editor span[style*="color: rgb(0, 0, 0)"],
+.rich-editor font[color="#000000"] {
+    background: rgba(243, 244, 246, .85); border-radius: 3px; padding: 0 2px;
+    box-decoration-break: clone; -webkit-box-decoration-break: clone;
+}
