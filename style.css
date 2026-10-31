@@ -1506,3 +1506,28 @@ body.voice-dragging, body.voice-dragging * { cursor: grabbing !important; user-s
     background: rgba(243, 244, 246, .85); border-radius: 3px; padding: 0 2px;
     box-decoration-break: clone; -webkit-box-decoration-break: clone;
 }
+
+/* toolbars stay at the top while you scroll through a long note */
+#textToolbar, #drawToolbar, #gridToolbar {
+    position: sticky; top: -16px; z-index: 30;
+    overflow: visible;
+    box-shadow: 0 6px 14px -8px rgba(0, 0, 0, .7);
+}
+@media (max-width: 760px) {
+    #textToolbar, #drawToolbar, #gridToolbar { top: -12px; }
+}
+.text-toolbar .tool-btn.active { background: rgba(124,111,240,.25); border-color: var(--primary); }
+
+/* heading (subkopje): 2.5× the normal text */
+.rich-editor h1, .rich-editor h2, .rich-editor h3 { font-weight: 700; line-height: 1.2; margin: 12px 0 6px; }
+.rich-editor h2 { font-size: 2.5em; }
+.rich-editor h1 { font-size: 2.8em; }
+.rich-editor h3 { font-size: 1.8em; }
+.rich-editor > h2:first-child { margin-top: 2px; }
+.heading-btn { font-weight: 700; }
+@media (max-width: 760px) {
+    /* one swipeable row instead of three lines of buttons */
+    #textToolbar .draw-tools { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    #textToolbar .draw-tools::-webkit-scrollbar { display: none; }
+    #textToolbar .draw-tools > * { flex-shrink: 0; }
+}

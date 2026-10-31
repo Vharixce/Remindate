@@ -1213,6 +1213,44 @@
         markTextChanged();
     }
 
+    /* ---- heading (subkopje) ---- */
+    function currentBlockTag() {
+        const sel = window.getSelection();
+        const node = sel.rangeCount ? sel.anchorNode : null;
+        if (!node || !editorEl.contains(node)) return '';
+        const el = (node.nodeType === 1 ? node : node.parentElement).closest('h1, h2, h3, li');
+        return el && editorEl.contains(el) ? el.tagName : '';
+    }
+
+    function toggleHeading() {
+        if (!noteById(state.currentNoteId)) return;
+        editorEl.focus();
+        const inHeading = /^H[123]$/.test(currentBlockTag());
+        document.execCommand('formatBlock', false, inHeading ? '<div>' : '<h2>');
+        markTextChanged();
+        updateToolbarState();
+    }
+
+    $('headingBtn').addEventListener('click', toggleHeading);
+    editorEl.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.altKey && e.key === '2') { e.preventDefault(); toggleHeading(); }
+    });
+
+    // Light up the buttons for the formatting where the cursor is (bold, list, heading, ...)
+    function updateToolbarState() {
+        const sel = window.getSelection();
+        const inside = sel.rangeCount && editorEl.contains(sel.anchorNode);
+        $('textToolbar').querySelectorAll('[data-cmd]').forEach((btn) => {
+            let on = false;
+            try { on = inside && document.queryCommandState(btn.dataset.cmd); } catch (_) { /* ignore */ }
+            btn.classList.toggle('active', !!on);
+        });
+        $('headingBtn').classList.toggle('active', !!inside && /^H[123]$/.test(currentBlockTag()));
+    }
+    document.addEventListener('selectionchange', () => {
+        if (state.prefs.mode === 'text') updateToolbarState();
+    });
+
     $('textColors').addEventListener('click', (e) => {
         const btn = e.target.closest('[data-text-color]');
         if (btn) applyTextColor(btn.dataset.textColor);
@@ -1447,6 +1485,7 @@
             editorEl.focus();
             document.execCommand(cmd.dataset.cmd, false, null);
             markTextChanged();
+            updateToolbarState();
             return;
         }
         const size = e.target.closest('[data-img-size]');
