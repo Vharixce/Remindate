@@ -1058,6 +1058,40 @@
 
     editorEl.addEventListener('input', markTextChanged);
 
+    // Typing "1. " or "- " / "* " at the start of a line turns it into a list (like Word)
+    editorEl.addEventListener('input', (e) => {
+        if (e.inputType !== 'insertText' || e.data !== ' ') return;
+        const sel = window.getSelection();
+        if (!sel.rangeCount || !sel.isCollapsed) return;
+        const node = sel.anchorNode;
+        if (!node || node.nodeType !== 3 || !editorEl.contains(node)) return;
+        if (node.parentElement.closest('li')) return; // already in a list
+        const before = node.data.slice(0, sel.anchorOffset).replace(/\u00a0/g, ' ');
+        const lineStart = !node.previousSibling || node.previousSibling.nodeName === 'BR';
+        if (!lineStart) return;
+        let cmd = null;
+        if (/^\s*1[.)] $/.test(before)) cmd = 'insertOrderedList';
+        else if (/^\s*[-*•] $/.test(before)) cmd = 'insertUnorderedList';
+        if (!cmd) return;
+        // remove the typed "1. " and start the list on this line
+        const rest = node.data.slice(sel.anchorOffset);
+        const range = document.createRange();
+        if (rest) {
+            node.data = rest;
+            range.setStart(node, 0);
+        } else {
+            // keep the (now empty) line alive so the list starts here, not on the line above
+            const br = document.createElement('br');
+            node.replaceWith(br);
+            range.setStartBefore(br);
+        }
+        range.collapse(true);
+        sel.removeAllRanges();
+        sel.addRange(range);
+        document.execCommand(cmd, false, null);
+        markTextChanged();
+    });
+
     // Shrink big photos so they fit in browser storage (and sync quickly)
     const IMAGE_MAX_SIDE = 1400;
     function imageFileToDataUrl(file) {
@@ -1207,6 +1241,17 @@
         if (e.target.closest('.voice-chip')) { handleVoiceChipClick(e); return; }
         const img = e.target.closest('img');
         selectImage(img && editorEl.contains(img) ? img : null);
+    });
+    // Tab / Shift+Tab inside a list: indent / outdent the item
+    editorEl.addEventListener('keydown', (e) => {
+        if (e.key !== 'Tab') return;
+        const sel = window.getSelection();
+        const node = sel.rangeCount ? sel.anchorNode : null;
+        const li = node && (node.nodeType === 1 ? node : node.parentElement).closest('li');
+        if (!li || !editorEl.contains(li)) return;
+        e.preventDefault();
+        document.execCommand(e.shiftKey ? 'outdent' : 'indent', false, null);
+        markTextChanged();
     });
     editorEl.addEventListener('keydown', (e) => {
         if (selectedImg && (e.key === 'Delete' || e.key === 'Backspace')) {

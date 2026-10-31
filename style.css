@@ -1479,3 +1479,8 @@ body.voice-dragging, body.voice-dragging * { cursor: grabbing !important; user-s
 .calendar-day-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .calendar-add-note { padding: 5px 12px; font-size: 13px; }
 .plan-modal .note-color-row { margin-top: 2px; }
+.rich-editor ul { list-style: disc; }
+.rich-editor ol { list-style: decimal; }
+.rich-editor ul ul { list-style: circle; }
+.rich-editor ol ol { list-style: lower-alpha; }
+.rich-editor li { margin: 2px 0; }
