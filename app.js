@@ -2453,6 +2453,7 @@
                     `<div class="calendar-chip${isRecurring(n) ? ' recurring' : ''}" draggable="true" data-note-id="${n.id}" style="${noteChipStyle(n)}" title="${escapeHtml(n.title.trim() || 'Untitled')} – click to open, drag to another day">${escapeHtml(n.title.trim() || 'Untitled')}</div>`)
             ];
             if (holidays.length) cell.classList.add('has-holiday');
+            if (items.length > 2) cell.classList.add('has-more'); // phones: dot top-right for "more than 2"
             cell.innerHTML = `<div class="calendar-day-number">${day.getDate()}</div>` +
                 (items.length
                     ? `<div class="calendar-chips">${items.slice(0, 2).join('')}${items.length > 2 ? `<div class="calendar-more">+${items.length - 2} more</div>` : ''}</div>${scheduled.length ? '<div class="calendar-dot"></div>' : ''}`
@@ -2733,7 +2734,8 @@
 
     $('calendarGrid').addEventListener('click', (e) => {
         const chip = e.target.closest('.calendar-chip');
-        if (chip) {
+        // on a phone the labels fill the whole day, so a tap selects the day (open notes from the list below)
+        if (chip && !isMobile()) {
             setTab('note');
             selectNote(chip.dataset.noteId);
             return;

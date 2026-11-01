@@ -1211,8 +1211,7 @@ input[type="color"] {
 .calendar-day .calendar-dot { display:none; }
 .calendar-note-item[draggable="true"] { cursor:grab; }
 @media (max-width: 760px) {
-    .calendar-chips { display:none; }
-    .calendar-day .calendar-dot { display:block; }
+    .calendar-day .calendar-dot { display:none; }
 }
 
 /* in-app dialogs (rename / confirm) */
@@ -1616,4 +1615,29 @@ body.touch-dragging, body.touch-dragging * { user-select: none !important; -webk
     .action-sheet { width: 100%; max-width: 100%; border-radius: 16px 16px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); }
     .calendar-day-head { flex-wrap: wrap; }
     .note-picker-modal { width: 100%; }
+}
+
+
+/* ---------- phone calendar: show 2 notes per day in a small font ---------- */
+@media (max-width: 760px) {
+    .calendar-day {
+        min-height: 59px !important;           /* ~1.4× taller than before */
+        padding: 3px 2px !important;
+        overflow: hidden;
+    }
+    .calendar-day-number { font-size: 11px; line-height: 1.2; padding-left: 1px; }
+    .calendar-chips { display: flex; gap: 2px; margin-top: 2px; }
+    .calendar-chip, .holiday-chip {
+        font-size: 9px; line-height: 1.35; padding: 1px 1.5px; border-radius: 3px;
+        letter-spacing: -0.35px; white-space: nowrap; overflow: hidden; text-overflow: clip;
+    }
+    .calendar-more { display: none; }
+    /* more than 2 notes on a day: a dot in the top-right corner */
+    .calendar-day.has-more::after {
+        content: ''; position: absolute; top: 4px; right: 4px;
+        width: 6px; height: 6px; border-radius: 50%; background: var(--primary);
+        box-shadow: 0 0 0 2px var(--card);
+    }
+    /* holidays now show as a striped label, so no stripes behind the day number */
+    .calendar-day.has-holiday .calendar-day-number { display: block !important; background: none !important; padding: 0 0 0 1px !important; border-radius: 0 !important; text-shadow: none !important; color: inherit !important; }
 }
