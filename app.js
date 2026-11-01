@@ -403,6 +403,7 @@
                 : ` · ${formatDateTime(note.scheduledAt)}`;
         }
         return `<div class="note-item ${note.id === state.currentNoteId ? 'active' : ''}" data-note-id="${note.id}">
+            <button class="more-btn note-more" data-note-id="${note.id}" type="button" title="More" aria-label="More">⋯</button>
             <span class="item-actions">
                 <button class="folder-action-btn note-rename" data-note-id="${note.id}" title="Rename note">Rename</button>
                 <button class="folder-action-btn folder-delete note-delete" data-note-id="${note.id}" title="Delete note">Delete</button>
@@ -441,6 +442,7 @@
                         <button class="folder-action-btn folder-rename" data-folder-id="${folder.id}" title="Rename folder">Rename</button>
                         <button class="folder-action-btn folder-delete" data-folder-id="${folder.id}" title="Delete folder">Delete</button>
                     </span>
+                    <button class="more-btn folder-more" data-folder-id="${folder.id}" type="button" title="More" aria-label="More">⋯</button>
                     <button class="folder-add" data-folder-id="${folder.id}" title="New note in this folder">+</button>
                 </div>
                 ${expanded ? `<div class="folder-items">${notes.length ? notes.map(noteItemHtml).join('') : '<div class="folder-empty">Empty</div>'}</div>` : ''}
@@ -555,6 +557,30 @@
     }
 
     treeEl.addEventListener('click', (e) => {
+        const noteMore = e.target.closest('.note-more');
+        if (noteMore) {
+            e.stopPropagation();
+            const note = noteById(noteMore.dataset.noteId);
+            if (!note) return;
+            showActionSheet(note.title.trim() || 'Untitled', [
+                { label: 'Open', run: () => { selectNote(note.id); if (isMobile()) app.classList.remove('mobile-open'); } },
+                { label: 'Rename', run: () => renameNote(note.id) },
+                { label: 'Delete', danger: true, run: () => deleteNote(note.id) }
+            ]);
+            return;
+        }
+        const folderMore = e.target.closest('.folder-more');
+        if (folderMore) {
+            e.stopPropagation();
+            const folder = state.folders.find((f) => f.id === folderMore.dataset.folderId);
+            if (!folder) return;
+            showActionSheet(folder.name, [
+                { label: 'New note in this folder', run: () => newNote({ folderId: folder.id }) },
+                { label: 'Rename folder', run: () => renameFolder(folder.id) },
+                { label: 'Delete folder', danger: true, run: () => deleteFolder(folder.id) }
+            ]);
+            return;
+        }
         const noteRename = e.target.closest('.note-rename');
         if (noteRename) {
             e.stopPropagation();
@@ -2469,9 +2495,12 @@
                     <div class="calendar-note-time">${escapeHtml(h.sets.join(', '))} ${h.obs ? 'observance (not a day off)' : 'holiday'}</div>
                 </div>`).join('');
         host.innerHTML = `<div class="calendar-day-head"><div class="calendar-day-title">${label}</div>` +
-            `<button class="btn btn-primary calendar-add-note" id="calendarAddNote" type="button" title="New note on this day">+ Note</button></div>` +
+            `<div class="calendar-day-buttons">` +
+            `<button class="btn calendar-pick-note" id="calendarPickNote" type="button" title="Put an existing note on this day">Add existing</button>` +
+            `<button class="btn btn-primary calendar-add-note" id="calendarAddNote" type="button" title="New note on this day">+ Note</button></div></div>` +
             holidayHtml + (notes.length
             ? notes.map((n) => `<div class="calendar-note-item${n.color ? ' colored' : ''}" draggable="true" data-note-id="${n.id}" style="${n.color ? `border-left-color:${n.color}` : ''}" title="Click to open – drag to another day">
+                    <button class="more-btn cal-more" data-note-id="${n.id}" type="button" title="More" aria-label="More">⋯</button>
                     <span class="item-actions">
                         <button class="folder-action-btn note-unschedule" data-note-id="${n.id}" title="Remove this note/alarm from this date">Remove from date</button>
                         <button class="folder-action-btn note-rename" data-note-id="${n.id}" title="Rename note">Rename</button>
@@ -2840,12 +2869,74 @@
         toast(choice === 'alt' ? `Removed "${title}" from the calendar` : `Skipped "${title}" on ${dateLabel}`);
     }
 
+    /* ---- pick an existing note for the selected day (same as dragging it onto the day) ---- */
+    function openNotePicker() {
+        const day = state.calendarDay;
+        if (!day) return;
+        $('notePickerTitle').textContent = `Add a note to ${day.getDate()} ${MONTHS[day.getMonth()]}`;
+        $('notePickerSearch').value = '';
+        renderNotePicker();
+        openModal('notePickerModal');
+        if (!isMobile()) setTimeout(() => $('notePickerSearch').focus(), 30);
+    }
+
+    function renderNotePicker() {
+        const q = $('notePickerSearch').value.trim().toLowerCase();
+        const match = (n) => !q || (n.title || '').toLowerCase().includes(q) || (n.content || '').toLowerCase().includes(q);
+        const groups = [...sortedFolders().map((f) => ({ name: f.name, notes: sortedNotes(state.notes.filter((n) => n.folderId === f.id)) })),
+            { name: 'No folder', notes: sortedNotes(state.notes.filter((n) => !n.folderId)) }]
+            .map((g) => ({ ...g, notes: g.notes.filter(match) }))
+            .filter((g) => g.notes.length);
+        const day = state.calendarDay;
+        $('notePickerList').innerHTML = groups.length ? groups.map((g) => `
+            <div class="picker-group">${escapeHtml(g.name)}</div>
+            ${g.notes.map((n) => {
+                const onDay = day && occurrenceOn(n, day);
+                const when = n.scheduledAt
+                    ? (isRecurring(n) ? `↻ ${repeatSummary(n)}` : `📅 ${formatDateTime(n.scheduledAt)}`)
+                    : 'Not scheduled';
+                return `<button type="button" class="picker-item${onDay ? ' on-day' : ''}" data-note-id="${n.id}">
+                    <span class="picker-dot" style="${n.color ? `background:${n.color}` : ''}"></span>
+                    <span class="picker-text">
+                        <span class="picker-title">${escapeHtml(n.title.trim() || 'Untitled')}</span>
+                        <span class="picker-meta">${escapeHtml(onDay ? 'Already on this day' : when)}</span>
+                    </span>
+                </button>`;
+            }).join('')}`).join('')
+            : `<div class="calendar-hint">${q ? 'No notes match your search.' : 'You have no notes yet.'}</div>`;
+    }
+
+    $('notePickerSearch').addEventListener('input', renderNotePicker);
+    $('notePickerList').addEventListener('click', (e) => {
+        const item = e.target.closest('.picker-item');
+        if (!item || !state.calendarDay) return;
+        $('notePickerModal').classList.remove('active');
+        openPlanFromTreeModal(item.dataset.noteId, state.calendarDay);
+    });
+    $('notePickerClose').addEventListener('click', closeModals);
+    $('notePickerBackdrop').addEventListener('click', closeModals);
+
     $('calendarDayNotes').addEventListener('click', (e) => {
+        if (e.target.closest('#calendarPickNote')) { openNotePicker(); return; }
         if (e.target.closest('#calendarAddNote')) {
             const d = state.calendarDay;
             if (!d) return;
             newNote({ scheduledAt: toLocalIso(new Date(d.getFullYear(), d.getMonth(), d.getDate(), 9, 0, 0)) });
             toast(`New note on ${d.getDate()} ${MONTHS[d.getMonth()]} – give it a title`);
+            return;
+        }
+        const calMore = e.target.closest('.cal-more');
+        if (calMore) {
+            const note = noteById(calMore.dataset.noteId);
+            const day = state.calendarDay;
+            if (!note) return;
+            showActionSheet(note.title.trim() || 'Untitled', [
+                { label: 'Open note', run: () => { setTab('note'); selectNote(note.id); } },
+                { label: 'Change date / time…', run: () => openPlanFromTreeModal(note.id, day || new Date()) },
+                { label: 'Remove from date', run: () => removeFromDate(note.id, day) },
+                { label: 'Rename', run: () => renameNote(note.id) },
+                { label: 'Delete', danger: true, run: () => deleteNote(note.id) }
+            ]);
             return;
         }
         const unschedule = e.target.closest('.note-unschedule');
@@ -4568,6 +4659,194 @@
             toastTimer = setTimeout(() => el.remove(), action ? 20000 : 3500);
         }
     }
+
+    /* ---------------- action menu (the ⋯ buttons on phones) ---------------- */
+    let sheetActions = [];
+    function showActionSheet(title, actions) {
+        sheetActions = actions;
+        $('actionSheetTitle').textContent = title;
+        $('actionSheetButtons').innerHTML = actions.map((a, i) =>
+            `<button type="button" class="btn action-btn${a.danger ? ' danger' : ''}" data-i="${i}">${escapeHtml(a.label)}</button>`).join('');
+        openModal('actionSheet');
+    }
+    $('actionSheetButtons').addEventListener('click', (e) => {
+        const btn = e.target.closest('.action-btn');
+        if (!btn) return;
+        const action = sheetActions[Number(btn.dataset.i)];
+        $('actionSheet').classList.remove('active');
+        if (action) action.run();
+    });
+    $('actionSheetCancel').addEventListener('click', () => $('actionSheet').classList.remove('active'));
+    $('actionSheetBackdrop').addEventListener('click', () => $('actionSheet').classList.remove('active'));
+
+    /* ---------------- phone: explorer button + tap next to the sidebar closes it ---------------- */
+    $('mobileExplorerBtn').addEventListener('click', () => app.classList.toggle('mobile-open'));
+    document.querySelector('.main').addEventListener('pointerdown', (e) => {
+        if (!isMobile() || !app.classList.contains('mobile-open')) return;
+        if (e.target.closest('#mobileExplorerBtn')) return;
+        app.classList.remove('mobile-open');
+    });
+
+    /* ---------------- drag & drop on touch screens ----------------
+     * Phones don't do HTML drag & drop with a finger. Here a long press (0.3 s)
+     * picks an item up and moving the finger drags it; under the hood it fires the
+     * same dragstart / dragover / drop / dragend events the mouse version uses,
+     * so everything (reorder, move to folder, put on a calendar day) works the same.
+     */
+    (function setupTouchDragDrop() {
+        const LONG_PRESS_MS = 300;
+        const MOVE_TOLERANCE = 10;
+        let pending = null; // finger is down on a draggable item, waiting for the long press
+        let drag = null;    // an item is being dragged
+
+        function fire(type, el, x, y, dt, related) {
+            if (!el) return false;
+            let ev;
+            try {
+                ev = new DragEvent(type, { bubbles: true, cancelable: true, clientX: x, clientY: y, dataTransfer: dt, relatedTarget: related || null });
+            } catch (_) {
+                ev = new Event(type, { bubbles: true, cancelable: true });
+                Object.defineProperties(ev, {
+                    dataTransfer: { value: dt }, clientX: { value: x }, clientY: { value: y }, relatedTarget: { value: related || null }
+                });
+            }
+            el.dispatchEvent(ev);
+            return ev.defaultPrevented;
+        }
+
+        const touchById = (list, id) => [...list].find((t) => t.identifier === id);
+
+        function cancelPending() {
+            if (pending) clearTimeout(pending.timer);
+            pending = null;
+        }
+
+        function scrollParent(el) {
+            for (let n = el; n && n !== document.body; n = n.parentElement) {
+                const s = getComputedStyle(n);
+                if (/(auto|scroll)/.test(s.overflowY) && n.scrollHeight > n.clientHeight) return n;
+            }
+            return null;
+        }
+
+        function startDrag() {
+            const { source, x, y, id } = pending;
+            pending = null;
+            if (!document.body.contains(source)) return;
+            let dt;
+            try { dt = new DataTransfer(); } catch (_) { return; }
+            const r = source.getBoundingClientRect();
+            drag = { source, dt, id, x, y, startX: x, target: null, accepted: false, dx: x - r.left, dy: y - r.top, raf: 0,
+                fromSidebar: !!source.closest('#sidebar') };
+            if (fire('dragstart', source, x, y, dt)) { drag = null; return; }
+            const ghost = source.cloneNode(true);
+            ghost.classList.add('touch-drag-ghost');
+            ghost.removeAttribute('id');
+            ghost.style.width = `${r.width}px`;
+            document.body.appendChild(ghost);
+            drag.ghost = ghost;
+            document.body.classList.add('touch-dragging');
+            source.classList.add('touch-drag-source');
+            if (navigator.vibrate) { try { navigator.vibrate(20); } catch (_) { /* ignore */ } }
+            moveTo(x, y);
+            drag.raf = requestAnimationFrame(autoScroll);
+        }
+
+        function moveTo(x, y) {
+            drag.x = x;
+            drag.y = y;
+            drag.ghost.style.transform = `translate(${x - drag.dx}px, ${y - drag.dy}px)`;
+            // On a phone the sidebar covers almost the whole screen. Pull a note sideways
+            // (towards the page) and the sidebar slides away so you can drop it on the calendar;
+            // moving up and down keeps it open for reordering.
+            const appEl = document.getElementById('app');
+            if (drag.fromSidebar && appEl.classList.contains('mobile-open')) {
+                const sr = document.getElementById('sidebar').getBoundingClientRect();
+                const right = !appEl.classList.contains('sidebar-right');
+                const pulled = right ? x - drag.startX > 70 : drag.startX - x > 70;
+                if (pulled || x > sr.right + 4 || x < sr.left - 4) appEl.classList.remove('mobile-open');
+            }
+            const target = document.elementFromPoint(x, y);
+            if (target !== drag.target) {
+                if (drag.target) fire('dragleave', drag.target, x, y, drag.dt, target);
+                if (target) fire('dragenter', target, x, y, drag.dt, drag.target);
+                drag.target = target;
+            }
+            drag.accepted = target ? fire('dragover', target, x, y, drag.dt) : false;
+        }
+
+        // keep scrolling while the finger rests near the top/bottom edge of a list or page
+        function autoScroll() {
+            if (!drag) return;
+            const scroller = drag.target && scrollParent(drag.target);
+            if (scroller) {
+                const r = scroller.getBoundingClientRect();
+                const edge = 48;
+                let dy = 0;
+                if (drag.y < r.top + edge) dy = -Math.ceil((r.top + edge - drag.y) / 4);
+                else if (drag.y > r.bottom - edge) dy = Math.ceil((drag.y - (r.bottom - edge)) / 4);
+                if (dy) { scroller.scrollTop += dy; moveTo(drag.x, drag.y); }
+            }
+            drag.raf = requestAnimationFrame(autoScroll);
+        }
+
+        function endDrag(drop) {
+            const d = drag;
+            drag = null;
+            cancelAnimationFrame(d.raf);
+            if (drop && d.accepted && d.target) fire('drop', d.target, d.x, d.y, d.dt);
+            fire('dragend', d.source, d.x, d.y, d.dt);
+            if (d.ghost) d.ghost.remove();
+            d.source.classList.remove('touch-drag-source');
+            document.body.classList.remove('touch-dragging');
+        }
+
+        document.addEventListener('touchstart', (e) => {
+            if (drag) return;
+            if (e.touches.length !== 1) { cancelPending(); return; }
+            const el = e.target.nodeType === 1 ? e.target : e.target.parentElement;
+            const source = el && el.closest('[draggable="true"]');
+            if (!source || el.closest('button, input, select, textarea, a, .voice-handle')) return;
+            const t = e.touches[0];
+            cancelPending();
+            pending = { source, x: t.clientX, y: t.clientY, id: t.identifier, timer: setTimeout(startDrag, LONG_PRESS_MS) };
+        }, { passive: true, capture: true });
+
+        document.addEventListener('touchmove', (e) => {
+            if (pending) {
+                const t = touchById(e.touches, pending.id);
+                if (!t || Math.hypot(t.clientX - pending.x, t.clientY - pending.y) > MOVE_TOLERANCE) cancelPending(); // it's a scroll
+                return;
+            }
+            if (!drag) return;
+            const t = touchById(e.touches, drag.id);
+            if (!t) return;
+            e.preventDefault();
+            moveTo(t.clientX, t.clientY);
+        }, { passive: false, capture: true });
+
+        document.addEventListener('touchend', (e) => {
+            if (pending) { cancelPending(); return; } // a normal tap
+            if (!drag || touchById(e.touches, drag.id)) return;
+            e.preventDefault(); // no "click" after a drag
+            endDrag(true);
+        }, { passive: false, capture: true });
+
+        document.addEventListener('touchcancel', () => {
+            cancelPending();
+            if (drag) endDrag(false);
+        }, { capture: true });
+
+        // no long-press menu / text selection while picking something up
+        document.addEventListener('contextmenu', (e) => {
+            if (pending || drag) e.preventDefault();
+        }, { capture: true });
+
+        // some phones start their own drag on long press: ours already handles it
+        document.addEventListener('dragstart', (e) => {
+            if (e.isTrusted && (pending || drag)) { e.preventDefault(); e.stopImmediatePropagation(); }
+        }, { capture: true });
+    })();
 
     /* ---------------- sneltoetsen ---------------- */
 

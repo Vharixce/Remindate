@@ -1136,11 +1136,7 @@ input[type="color"] {
     }
 
     .expand-sidebar {
-        display: block !important;
-    }
-
-    .app.mobile-open .expand-sidebar {
-        display: none !important;
+        display: none !important;   /* phones use the folder button in the top bar */
     }
 
     .main {
@@ -1530,4 +1526,94 @@ body.voice-dragging, body.voice-dragging * { cursor: grabbing !important; user-s
     #textToolbar .draw-tools { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
     #textToolbar .draw-tools::-webkit-scrollbar { display: none; }
     #textToolbar .draw-tools > * { flex-shrink: 0; }
+}
+
+/* ---------- touch drag & drop ---------- */
+[draggable="true"] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.touch-drag-ghost {
+    position: fixed !important; left: 0 !important; top: 0 !important; margin: 0 !important;
+    z-index: 1000; pointer-events: none; opacity: .92;
+    box-shadow: 0 10px 28px rgba(0,0,0,.55); border-radius: 8px;
+    background: var(--panel); outline: 2px solid var(--primary);
+}
+.touch-drag-ghost .item-actions, .touch-drag-ghost .folder-actions, .touch-drag-ghost .folder-add { display: none !important; }
+.touch-drag-source { opacity: .35; }
+body.touch-dragging, body.touch-dragging * { user-select: none !important; -webkit-user-select: none !important; }
+
+/* ---------- note picker ---------- */
+.calendar-day-buttons { display: flex; gap: 8px; flex-shrink: 0; }
+.calendar-pick-note { padding: 5px 12px; font-size: 13px; }
+.note-picker-modal { width: 460px; max-height: min(640px, calc(100dvh - 32px)); }
+.note-picker-search {
+    width: 100%; background: var(--card); border: 1px solid var(--border); color: var(--text);
+    padding: 9px 12px; border-radius: 8px; font-size: 14px; outline: none;
+}
+.note-picker-search:focus { border-color: var(--primary); }
+.note-picker-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; min-height: 120px; margin: 0 -6px; padding: 0 6px; }
+.picker-group { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-dim); margin: 8px 2px 2px; }
+.picker-item {
+    display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    padding: 9px 11px; color: var(--text); cursor: pointer; font: inherit;
+}
+.picker-item:hover, .picker-item:focus-visible { border-color: var(--primary); background: var(--hover); outline: none; }
+.picker-item.on-day { opacity: .6; }
+.picker-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; background: linear-gradient(135deg, rgba(124,111,240,.8) 50%, rgba(45,212,191,.7) 50%); }
+.picker-text { display: flex; flex-direction: column; min-width: 0; }
+.picker-title { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.picker-meta { font-size: 12px; color: var(--text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+
+/* ================= phones & touch screens ================= */
+.mobile-explorer-btn { display: none; }
+.more-btn {
+    display: none; flex-shrink: 0; align-items: center; justify-content: center;
+    width: 32px; height: 32px; padding: 0; border-radius: 8px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--panel); color: var(--text);
+    font-size: 18px; line-height: 1; letter-spacing: 1px;
+}
+.more-btn:hover { border-color: var(--primary); }
+
+/* action menu */
+.action-sheet-modal { z-index: 125; }
+.action-sheet { width: 340px; gap: 8px; }
+.action-sheet-title { font-size: 13px; color: var(--text-dim); padding: 0 2px 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.action-sheet-buttons { display: flex; flex-direction: column; gap: 6px; }
+.action-btn { width: 100%; text-align: left; padding: 12px 14px; font-size: 15px; }
+.action-btn.danger { color: var(--danger); }
+.action-cancel { width: 100%; padding: 12px; font-size: 15px; margin-top: 4px; }
+
+@media (max-width: 760px), (hover: none) {
+    /* one ⋯ button instead of always-visible Rename / Delete */
+    .more-btn { display: inline-flex; }
+    .note-item .item-actions, .folder-header .folder-actions, .calendar-note-item .item-actions { display: none !important; }
+    .note-item .note-item-title, .note-item:hover .note-item-title { padding-right: 0 !important; }
+    .note-item { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; align-items: center; }
+    .note-item .note-more { grid-column: 2; grid-row: 1 / span 2; width: 30px; height: 30px; }
+    .note-item .note-item-title { grid-column: 1; grid-row: 1; }
+    .note-item .note-item-meta { grid-column: 1; grid-row: 2; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .folder-header { gap: 6px; }
+    .folder-more { width: 30px; height: 30px; margin-left: auto; }
+    .folder-add { width: 30px; height: 30px; font-size: 18px; margin-left: 0; }
+    .calendar-note-item { display: grid; grid-template-columns: 1fr auto; column-gap: 10px; align-items: center; padding-right: 10px !important; }
+    .calendar-note-item .cal-more { grid-column: 2; grid-row: 1 / span 2; }
+    .calendar-note-item > div { grid-column: 1; min-width: 0; }
+}
+
+@media (max-width: 760px) {
+    .mobile-explorer-btn { display: inline-flex; align-items: center; justify-content: center; width: 38px; height: 38px; margin-right: 4px; }
+    .topbar { gap: 4px; }
+    /* bigger touch targets */
+    .note-color { width: 30px; height: 30px; }
+    .text-color { width: 26px; height: 26px; }
+    .tool-btn { min-height: 36px; min-width: 36px; }
+    .check-row input[type="checkbox"] { width: 18px; height: 18px; }
+    /* iPhone zooms in on inputs with text smaller than 16px: prevent that */
+    input[type="text"], input[type="email"], input[type="search"], input[type="password"],
+    input[type="date"], input[type="time"], select, textarea, .rich-editor, .title-input { font-size: 16px !important; }
+    /* menus slide up from the bottom, like a phone app */
+    .action-sheet-modal.active { align-items: flex-end; padding: 0; }
+    .action-sheet { width: 100%; max-width: 100%; border-radius: 16px 16px 0 0; padding: 14px 14px calc(14px + env(safe-area-inset-bottom)); }
+    .calendar-day-head { flex-wrap: wrap; }
+    .note-picker-modal { width: 100%; }
 }

@@ -65,6 +65,9 @@
         <!-- Main panel -->
         <main class="main">
             <div class="topbar">
+                <button class="icon-btn mobile-explorer-btn" id="mobileExplorerBtn" type="button" title="Notes &amp; folders" aria-label="Notes and folders">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+                </button>
                 <div class="tabs">
                     <button class="tab active" id="tabNote">Note</button>
                     <button class="tab" id="tabCalendar">Calendar</button>
@@ -420,6 +423,29 @@
                 <button class="btn" id="emailCancel" type="button">Cancel</button>
                 <button class="btn btn-primary" id="emailSave" type="button">Save</button>
             </div>
+        </div>
+    </div>
+
+    <!-- Pick an existing note for a calendar day -->
+    <div class="modal" id="notePickerModal">
+        <div class="modal-backdrop" id="notePickerBackdrop"></div>
+        <div class="modal-content note-picker-modal">
+            <div class="modal-header">
+                <div id="notePickerTitle">Add a note to this day</div>
+                <button class="icon-btn" id="notePickerClose" title="Close">&times;</button>
+            </div>
+            <input type="search" id="notePickerSearch" class="note-picker-search" placeholder="Search notes…" autocomplete="off">
+            <div class="note-picker-list" id="notePickerList"></div>
+        </div>
+    </div>
+
+    <!-- Action menu (⋯ on phones) -->
+    <div class="modal action-sheet-modal" id="actionSheet">
+        <div class="modal-backdrop" id="actionSheetBackdrop"></div>
+        <div class="modal-content action-sheet">
+            <div class="action-sheet-title" id="actionSheetTitle"></div>
+            <div class="action-sheet-buttons" id="actionSheetButtons"></div>
+            <button class="btn action-cancel" id="actionSheetCancel" type="button">Cancel</button>
         </div>
     </div>
 
