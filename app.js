@@ -10,17 +10,12 @@
         folders: 'remindate.folders.v1',
         prefs: 'remindate.prefs.v1',
         alarms: 'remindate.alarms.v1',
-        fileHandle: 'remindate.fileHandle.v1',
         deleted: 'remindate.deleted.v1',
         trash: 'remindate.trash.v1',
         updatedAt: 'remindate.updatedAt.v1',
         github: 'remindate.github.v1'
     };
 
-    const fileSync = {
-        handle: null,
-        enabled: false
-    };
 
     // [color, name] in display order
     const PALETTE_NAMED = [
@@ -166,13 +161,11 @@
     const saveNotes = () => {
         writeJSON(STORAGE.notes, state.notes);
         markChanged();
-        scheduleFileSave();
         scheduleGithubSave();
     };
     const saveFolders = () => {
         writeJSON(STORAGE.folders, state.folders);
         markChanged();
-        scheduleFileSave();
         scheduleGithubSave();
     };
     const savePrefs = () => writeJSON(STORAGE.prefs, state.prefs);
@@ -665,7 +658,7 @@
         }
         const header = e.target.closest('.folder-header');
         if (!header) return;
-        if (!draggedTreeNoteId && !e.dataTransfer.types.includes('text/plain')) return;
+        if (!draggedTreeNoteId && !Array.from(e.dataTransfer.types || []).includes('text/plain')) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         header.classList.add('drag-over');
@@ -1448,7 +1441,7 @@
         (typeof draggedCalendarNote !== 'undefined' && draggedCalendarNote));
     editorEl.addEventListener('dragover', (e) => {
         if (draggingAppItem()) { e.dataTransfer.dropEffect = 'none'; return; }
-        if ([...e.dataTransfer.types].includes('Files')) e.preventDefault();
+        if (Array.from(e.dataTransfer.types || []).includes('Files')) e.preventDefault();
     });
     editorEl.addEventListener('drop', (e) => {
         if (draggingAppItem()) { e.preventDefault(); return; }
@@ -1500,6 +1493,7 @@
     });
 
     try { document.execCommand('styleWithCSS', false, false); } catch (_) { /* ignore */ }
+    try { document.execCommand('defaultParagraphSeparator', false, 'div'); } catch (_) { /* ignore */ }
     // Toolbar buttons must not take the focus away from the text
     $('textToolbar').addEventListener('mousedown', (e) => {
         if (e.target.closest('button')) e.preventDefault();
@@ -1829,7 +1823,7 @@
 
     function pickVoiceMime() {
         if (!window.MediaRecorder) return '';
-        return ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg;codecs=opus', 'audio/aac']
+        return ['audio/mp4;codecs=mp4a.40.2', 'audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus', 'audio/aac']
             .find((t) => MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(t)) || '';
     }
 
@@ -2066,9 +2060,7 @@
             $('scheduleDate').value = '';
             $('scheduleTime').value = '';
             $('alarmEnabled').checked = false;
-            $('repeatCount').value = 0;
             $('snoozeMinutes').value = 5;
-            $('repeatCountLabel').textContent = '0';
             $('snoozeMinutesLabel').textContent = '5';
             $('scheduleDate').disabled = true;
             $('scheduleTime').disabled = true;
@@ -2096,9 +2088,7 @@
         $('emailEnabled').disabled = false;
         $('emailEnabled').checked = note.emailEnabled;
         $('emailToLabel').textContent = note.emailEnabled && note.emailTo ? `→ ${note.emailTo}` : '';
-        $('repeatCount').value = note.alarmRepeatCount;
         $('snoozeMinutes').value = note.alarmSnoozeMinutes;
-        $('repeatCountLabel').textContent = note.alarmRepeatCount;
         $('snoozeMinutesLabel').textContent = note.alarmSnoozeMinutes;
         updateEditorRepeatUi(note);
         applyScheduleCollapse();
@@ -2197,7 +2187,7 @@
         const base = parseDate(note.scheduledAt);
         if (!base) return '<div class="summary-line dim">Not in the calendar yet. Pick a date to schedule this note.</div>';
         const alarm = (note.alarmEnabled
-            ? `🔔 Alarm on${note.alarmRepeatCount ? `, rings ${note.alarmRepeatCount + 1}× (every ${note.alarmSnoozeMinutes} min)` : ''}`
+            ? '🔔 Alarm on (rings every minute until you stop it)'
             : '🔕 No alarm') + (note.emailEnabled && note.emailTo ? ` · ✉️ Email to ${escapeHtml(note.emailTo)}` : '');
         if (!isRecurring(note)) {
             const passed = base.getTime() < Date.now();
@@ -2250,7 +2240,6 @@
         }
 
         note.alarmEnabled = $('alarmEnabled').checked;
-        note.alarmRepeatCount = Number($('repeatCount').value);
         note.alarmSnoozeMinutes = Number($('snoozeMinutes').value);
 
         const base = parseDate(note.scheduledAt);
@@ -2374,10 +2363,6 @@
         if (emailTarget) emailTarget.off();
         closeEmailModal();
     });
-    $('repeatCount').addEventListener('input', () => {
-        $('repeatCountLabel').textContent = $('repeatCount').value;
-    });
-    $('repeatCount').addEventListener('change', scheduleChanged);
     $('snoozeMinutes').addEventListener('input', () => {
         $('snoozeMinutesLabel').textContent = $('snoozeMinutes').value;
     });
@@ -2799,7 +2784,7 @@
     $('calendarGrid').addEventListener('dragover', (e) => {
         const cell = e.target.closest('.calendar-day');
         if (!cell) return;
-        if (!draggedTreeNoteId && !e.dataTransfer.types.includes('text/plain')) return;
+        if (!draggedTreeNoteId && !Array.from(e.dataTransfer.types || []).includes('text/plain')) return;
         e.preventDefault();
         e.dataTransfer.dropEffect = 'move';
         cell.classList.add('drag-over');
@@ -3015,9 +3000,7 @@
         $('planFromTreeDate').value = `${day.getFullYear()}-${pad(day.getMonth() + 1)}-${pad(day.getDate())}`;
         $('planFromTreeTime').value = timeStr;
         $('planFromTreeAlarm').checked = note.alarmEnabled;
-        $('planFromTreeRepeat').value = note.alarmRepeatCount || 0;
         $('planFromTreeSnooze').value = note.alarmSnoozeMinutes || 5;
-        $('planFromTreeRepeatLabel').textContent = $('planFromTreeRepeat').value;
         $('planFromTreeSnoozeLabel').textContent = $('planFromTreeSnooze').value;
         $('advancedSettings').hidden = !isRecurring(note);
         $('advancedSettingsToggle').setAttribute('aria-expanded', String(isRecurring(note)));
@@ -3086,9 +3069,6 @@
     planClose.addEventListener('click', closePlanFromTreeModal);
     planCancel.addEventListener('click', closePlanFromTreeModal);
 
-    $('planFromTreeRepeat').addEventListener('input', () => {
-        $('planFromTreeRepeatLabel').textContent = $('planFromTreeRepeat').value;
-    });
     $('planFromTreeSnooze').addEventListener('input', () => {
         $('planFromTreeSnoozeLabel').textContent = $('planFromTreeSnooze').value;
     });
@@ -3112,7 +3092,6 @@
             note.scheduledAt = null;
         }
         note.alarmEnabled = $('planFromTreeAlarm').checked;
-        note.alarmRepeatCount = Number($('planFromTreeRepeat').value);
         note.alarmSnoozeMinutes = Number($('planFromTreeSnooze').value);
         const mode = $('repeatMode').value;
         const weekdays = [...$('weekdayOptions').querySelectorAll('input:checked')].map((el) => Number(el.value));
@@ -4173,7 +4152,6 @@
         writeJSON(STORAGE.folders, state.folders);
         writeJSON(STORAGE.deleted, state.deleted);
         writeJSON(STORAGE.updatedAt, state.updatedAt);
-        scheduleFileSave();
 
         state.folders.forEach((f) => {
             // folders that are new on this device start expanded
@@ -4371,40 +4349,67 @@
             deleted: state.deleted
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `remindate-backup-${new Date().toISOString().slice(0, 10)}.json`;
+        a.href = url;
+        a.download = `remindate-${dayKey(new Date())}.json`;
+        a.rel = 'noopener';
+        // Firefox needs the link in the page; Safari/Firefox need the URL to live a moment longer
+        document.body.appendChild(a);
         a.click();
-        URL.revokeObjectURL(a.href);
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 4000);
+        toast('Saved your notes as a .json file');
     }
 
+    // Upload a .json file: replace everything, or add it to the notes you already have
     function importData(file) {
         const reader = new FileReader();
+        reader.onerror = () => toast('Could not read this file');
         reader.onload = async () => {
+            let snap;
             try {
-                const data = JSON.parse(reader.result);
-                const notes = Array.isArray(data) ? data : data.notes;
-                const folders = Array.isArray(data) ? [] : (data.folders || []);
-                if (!Array.isArray(notes)) throw new Error('No notes found');
-
-                if (!(await askConfirm('Restore backup', 'This replaces your current notes and folders. Continue?', 'Replace'))) return;
-
-                state.notes = notes.map((n) => { migrateNote(n); return n; });
-                state.folders = Array.isArray(folders) ? folders : [];
-                state.folders.forEach(migrateFolder);
-                state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
-                state.currentFolderId = noteById(state.currentNoteId)?.folderId || null;
-                state.prefs.expandedFolders = ['__none', ...state.folders.map((f) => f.id)];
-
-                saveNotes();
-                saveFolders();
-                savePrefs();
-                renderTree();
-                renderEditor();
-                toast('Backup imported');
+                snap = normalizeSnapshot(JSON.parse(reader.result));
             } catch (err) {
-                toast('Could not read this file: ' + err.message);
+                toast('This is not a Remindate .json file');
+                return;
             }
+            flushEditor();
+            const count = `${snap.notes.length} note${snap.notes.length === 1 ? '' : 's'}` +
+                (snap.folders.length ? ` and ${snap.folders.length} folder${snap.folders.length === 1 ? '' : 's'}` : '');
+            const choice = await askDialog({
+                title: 'Upload .json',
+                message: `This file has ${count}. Add them to your notes, or replace everything you have now?`,
+                okLabel: 'Add to my notes',
+                altLabel: 'Replace all'
+            });
+            if (!choice) return;
+            const now = new Date().toISOString();
+            if (choice === 'alt') {
+                // replace: the notes/folders that are not in the file count as deleted (also for GitHub sync)
+                const keepNotes = new Set(snap.notes.map((n) => n.id));
+                const keepFolders = new Set(snap.folders.map((f) => f.id));
+                state.notes.forEach((n) => { if (!keepNotes.has(n.id)) { state.deleted.notes[n.id] = now; addToTrash(n); } });
+                state.folders.forEach((f) => { if (!keepFolders.has(f.id)) state.deleted.folders[f.id] = now; });
+                snap.notes.forEach((n) => { n.modifiedAt = now; delete state.deleted.notes[n.id]; });
+                snap.folders.forEach((f) => { f.modifiedAt = now; delete state.deleted.folders[f.id]; });
+                state.notes = snap.notes;
+                state.folders = snap.folders;
+            } else {
+                const merged = mergeSnapshots(localSnapshot(), { ...snap, deleted: { notes: {}, folders: {} } });
+                state.notes = merged.notes.map((n) => { migrateNote(n); return n; });
+                state.folders = merged.folders;
+            }
+            if (!noteById(state.currentNoteId)) state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
+            state.currentFolderId = noteById(state.currentNoteId)?.folderId || null;
+            state.prefs.expandedFolders = ['__none', ...state.folders.map((f) => f.id)];
+            saveFolders();
+            saveNotes();
+            savePrefs();
+            renderTree();
+            renderEditor();
+            if (state.prefs.activeTab === 'calendar') renderCalendar();
+            toast(choice === 'alt' ? `Replaced with ${count}` : `Added ${count}`);
         };
         reader.readAsText(file);
     }
@@ -4422,6 +4427,8 @@
     // alarms, e.g. when the app was closed or after a sync, are skipped silently.
     const ALARM_GRACE_MS = 10 * 60000;
     const ALARM_MAX_SOUND_MS = 20000;
+    const ALARM_REPEAT_MS = 60 * 1000;          // ring again every minute…
+    const ALARM_GIVE_UP_MS = 2 * 60 * 60 * 1000; // …until stopped, or for at most 2 hours
 
     // Mark the most recent (already passed) occurrence as handled, so changing a
     // note's schedule never makes it ring immediately for a time in the past.
@@ -4453,8 +4460,7 @@
             if (!runtime || runtime.dueTime !== dueTime) {
                 runtime = {
                     dueTime,
-                    repeatsLeft: note.alarmRepeatCount,
-                    snoozeMinutes: note.alarmSnoozeMinutes,
+                    rings: 0,
                     nextAt: now - dueTime > ALARM_GRACE_MS ? null : dueTime
                 };
                 state.alarms[note.id] = runtime;
@@ -4463,38 +4469,53 @@
 
             if (runtime.nextAt === null || runtime.nextAt > now) return;
 
-            if (runtime.repeatsLeft > 0) {
-                runtime.repeatsLeft -= 1;
-                runtime.nextAt = now + runtime.snoozeMinutes * 60000;
-            } else {
-                runtime.nextAt = null;
-            }
+            // ring now, and again every minute until "Stop alarm" (or snooze) is pressed
+            runtime.rings = (runtime.rings || 0) + 1;
+            const stillGoing = now - runtime.dueTime < ALARM_GIVE_UP_MS;
+            runtime.nextAt = stillGoing ? now + ALARM_REPEAT_MS : null;
             changed = true;
             saveAlarms();
-            showAlarm(note, dueTime);
+            showAlarm(note, dueTime, runtime.rings, !stillGoing);
         });
 
         if (changed) saveAlarms();
     }
 
-    function showAlarm(note, dueTime) {
+    function showAlarm(note, dueTime, ring = 1, lastRing = false) {
         const title = note.title.trim() || 'Untitled';
         const body = note.content.trim().slice(0, 120) || 'Scheduled note';
-        notify(title, body);
+        notify(`⏰ ${title}`, body, 'remindate-alarm-' + note.id);
         playAlarmSound();
-        toast(`Alarm: ${title} - ${formatTime(toLocalIso(new Date(dueTime)))}`, {
-            label: 'Stop alarm',
+        const snooze = Math.max(1, Number(note.alarmSnoozeMinutes) || 5);
+        const runtimeFor = () => {
+            state.alarms = readJSON(STORAGE.alarms, {}) || {};
+            const r = state.alarms[note.id];
+            return r && r.dueTime === dueTime ? r : null;
+        };
+        toast(`⏰ ${title} – ${formatTime(toLocalIso(new Date(dueTime)))}${ring > 1 ? ` (${ring}×)` : ''}${lastRing ? ' · last reminder' : ''}`, {
             persistent: true,
             key: 'alarm-' + note.id,
-            onClick: () => {
-                stopAlarmSound();
-                const runtime = state.alarms[note.id];
-                if (runtime && runtime.dueTime === dueTime) {
-                    runtime.nextAt = null;
-                    runtime.repeatsLeft = 0;
-                    saveAlarms();
+            buttons: [
+                {
+                    label: `Snooze ${snooze} min`,
+                    secondary: true,
+                    onClick: () => {
+                        stopAlarmSound();
+                        const r = runtimeFor();
+                        const until = Date.now() + snooze * 60000;
+                        if (r) { r.nextAt = until; saveAlarms(); }
+                        toast(`Snoozed until ${formatTime(toLocalIso(new Date(until)))}`);
+                    }
+                },
+                {
+                    label: 'Stop alarm',
+                    onClick: () => {
+                        stopAlarmSound();
+                        const r = runtimeFor();
+                        if (r) { r.nextAt = null; saveAlarms(); }
+                    }
                 }
-            }
+            ]
         });
     }
 
@@ -4554,9 +4575,16 @@
         if (saved) {
             alarmAudio = new Audio(saved);
             alarmAudio.loop = true;
-            alarmAudio.play().catch(() => {});
+            const audio = alarmAudio;
+            audio.play().catch(() => {
+                if (alarmAudio === audio) { alarmAudio = null; playBeepPattern(); }
+            });
             return;
         }
+        playBeepPattern();
+    }
+
+    function playBeepPattern() {
         const ctx = getAudioContext();
         if (!ctx) return;
         alarmMaster = ctx.createGain();
@@ -4607,11 +4635,12 @@
     $('alarmSoundClose').addEventListener('click', closeModals);
     $('alarmSoundBackdrop').addEventListener('click', closeModals);
 
-    function notify(title, body) {
+    function notify(title, body, tag) {
         if (!('Notification' in window)) return;
         if (Notification.permission === 'granted') {
             try {
-                new Notification(title, { body, icon: 'icon.svg' });
+                // same tag = replaces the previous one instead of stacking up
+                new Notification(title, { body, icon: 'icon.svg', ...(tag ? { tag } : {}) });
             } catch (err) {
                 console.warn('Could not show notification', err);
             }
@@ -4644,16 +4673,17 @@
         text.textContent = message;
         el.appendChild(text);
 
-        if (action) {
+        const buttons = action ? (action.buttons || [{ label: action.label, onClick: action.onClick }]) : [];
+        buttons.forEach((b) => {
             const btn = document.createElement('button');
-            btn.className = 'toast-action';
-            btn.textContent = action.label;
+            btn.className = 'toast-action' + (b.secondary ? ' secondary' : '');
+            btn.textContent = b.label;
             btn.addEventListener('click', () => {
-                action.onClick();
                 el.remove();
+                b.onClick();
             });
             el.appendChild(btn);
-        }
+        });
 
         host.appendChild(el);
         if (!action?.persistent) {
@@ -4661,6 +4691,21 @@
             toastTimer = setTimeout(() => el.remove(), action ? 20000 : 3500);
         }
     }
+
+    /* ---------------- stray drops ---------------- */
+    // A file (or a dragged note) let go outside a drop area must not make the browser
+    // open/navigate away from the app (Firefox and Safari do that).
+    document.addEventListener('dragover', (e) => {
+        if (!e.defaultPrevented && Array.from(e.dataTransfer ? e.dataTransfer.types || [] : []).includes('Files')) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'none';
+        }
+    });
+    document.addEventListener('drop', (e) => {
+        // moving text or a picture inside the note itself is fine
+        if (e.target && e.target.closest && e.target.closest('#noteContent')) return;
+        if (!e.defaultPrevented) e.preventDefault();
+    });
 
     /* ---------------- action menu (the ⋯ buttons on phones) ---------------- */
     let sheetActions = [];
@@ -4892,155 +4937,12 @@
     checkAlarms();
     setInterval(checkAlarms, 5000);
 
-    function updateSyncStatus() {
-        const el = $('syncStatus');
-        if (!el) return;
-        if (fileSync.enabled && fileSync.handle) {
-            el.textContent = `Linked to notes.json • Auto-save • ${fileSync.handle.name || ''}`;
-        } else {
-            el.textContent = 'No file linked • Local storage only • Use “Choose notes.json” or export/import';
-        }
-    }
-
-    function buildNotesPayload() {
-        return {
-            app: 'Remindate',
-            version: 1,
-            updatedAt: state.updatedAt,
-            folders: state.folders,
-            notes: state.notes,
-            deleted: state.deleted
-        };
-    }
-
-    function applyNotesPayload(data) {
-        const notes = Array.isArray(data) ? data : data.notes;
-        const folders = Array.isArray(data) ? [] : (data.folders || []);
-        if (!Array.isArray(notes)) throw new Error('No notes found in notes.json');
-        state.notes = notes.map((n) => { migrateNote(n); return n; });
-        state.folders = Array.isArray(folders) ? folders : [];
-        state.folders.forEach(migrateFolder);
-        if (!Array.isArray(data)) state.deleted = normalizeDeleted(data.deleted);
-        state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
-        state.currentFolderId = noteById(state.currentNoteId)?.folderId || null;
-        state.prefs.expandedFolders = ['__none', ...state.folders.map((f) => f.id)];
-        saveNotes();
-        saveFolders();
-        renderTree();
-        renderEditor();
-        if (state.prefs.activeTab === 'calendar') renderCalendar();
-    }
-
-    async function writeToFileHandle() {
-        if (!fileSync.enabled || !fileSync.handle) return;
-        if (typeof fileSync.handle.queryPermission === 'function') {
-            const perm = await fileSync.handle.queryPermission({ mode: 'readwrite' });
-            if (perm !== 'granted') {
-                const req = await fileSync.handle.requestPermission({ mode: 'readwrite' });
-                if (req !== 'granted') {
-                    toast('No write access to notes.json');
-                    return;
-                }
-            }
-        }
-        try {
-            const writable = await fileSync.handle.createWritable();
-            await writable.write(JSON.stringify(buildNotesPayload(), null, 2));
-            await writable.close();
-        } catch (err) {
-            console.error('Could not write to notes.json', err);
-            toast('Could not write to notes.json');
-        }
-    }
-
-    let fileSaveTimer = null;
-    function scheduleFileSave() {
-        if (!fileSync.enabled || !fileSync.handle) return;
-        clearTimeout(fileSaveTimer);
-        fileSaveTimer = setTimeout(writeToFileHandle, 800);
-    }
-
-    async function pickNotesFile() {
-        if (!('showOpenFilePicker' in window)) {
-            toast('File System Access API is not supported in this browser');
-            alert('Choosing notes.json is supported in Chrome, Edge, or Opera on desktop. Safari and iOS do not support it.');
-            return;
-        }
-        try {
-            const [handle] = await window.showOpenFilePicker({
-                types: [{
-                    description: 'Remindate notes',
-                    accept: { 'application/json': ['.json'] }
-                }],
-                multiple: false
-            });
-            fileSync.handle = handle;
-            fileSync.enabled = true;
-            updateSyncStatus();
-            const file = await handle.getFile();
-            const text = await file.text();
-            try {
-                const data = JSON.parse(text);
-                applyNotesPayload(data);
-                toast('notes.json loaded and linked');
-            } catch (err) {
-                console.error(err);
-                toast('Could not read notes.json');
-            }
-            await writeToFileHandle();
-        } catch (err) {
-            if (err.name === 'AbortError') return;
-            console.error(err);
-            toast('Could not open notes.json');
-        }
-    }
-
-    async function loadFromSameDir() {
-        if (!('showOpenFilePicker' in window)) {
-            toast('Not supported in this browser');
-            return;
-        }
-        try {
-            const [handle] = await window.showOpenFilePicker({
-                types: [{
-                    description: 'Remindate notes.json',
-                    accept: { 'application/json': ['.json'] }
-                }],
-                startIn: 'documents',
-                multiple: false
-            });
-            fileSync.handle = handle;
-            fileSync.enabled = true;
-            updateSyncStatus();
-            const file = await handle.getFile();
-            const text = await file.text();
-            applyNotesPayload(JSON.parse(text));
-            toast('notes.json loaded from selected file');
-            await writeToFileHandle();
-        } catch (err) {
-            if (err.name === 'AbortError') return;
-            console.error(err);
-        }
-    }
-
-    $('pickNotesFileBtn').addEventListener('click', pickNotesFile);
-    $('loadFromDirBtn').addEventListener('click', loadFromSameDir);
-    $('saveToFileBtn').addEventListener('click', async () => {
-        if (!fileSync.enabled) {
-            toast('Choose notes.json first');
-            return;
-        }
-        await writeToFileHandle();
-        toast('Saved to notes.json');
-    });
-
     window.addEventListener('beforeunload', flushEditor);
     window.addEventListener('resize', () => {
         fitCanvas();
         if (state.prefs.activeTab === 'calendar') renderCalendar();
     });
 
-    updateSyncStatus();
     updateGithubStatus();
     if (githubConfig.autoSync && githubConfigured()) {
         setTimeout(() => syncGithub({ silent: true }), 400);

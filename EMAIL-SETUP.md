@@ -10,8 +10,8 @@ Remindate is a website without its own server, so the emails are sent by a small
 It works even when your computer and phone are off. GitHub's timer is not exact, so an email
 can arrive **a few minutes late** (sometimes up to ~15 min at busy moments).
 
-The workflow file is `scripts/email-reminders.yml` (it has to be moved to
-`.github/workflows/`, see step 4) and the script is `scripts/email-reminders.mjs`.
+The workflow file goes in `.github/workflows/email-reminders.yml` (step 4 puts it there)
+and the script is `scripts/email-reminders.mjs`.
 
 ---
 
@@ -58,23 +58,25 @@ Optional settings go under the **Variables** tab on the same page:
 | `REMINDATE_DATA_PATH`   | `notes.json`                             |
 | `REMINDATE_APP_URL`     | `https://vharixce.github.io/Remindate/`  |
 
-## 4. Move the workflow file and push
+## 4. Put the workflow in place (this is why no emails were sent yet)
 
-GitHub only runs workflows from the `.github/workflows` folder. Move the workflow file there
-first. In the Remindate folder (Command Prompt / PowerShell):
+GitHub only runs workflows from the `.github/workflows` folder. The file is still in
+`scripts/email-reminders.yml`, so the reminder check has never run.
 
-```
-mkdir .github\workflows
-move scripts\email-reminders.yml .github\workflows\email-reminders.yml
-```
+**Double-click `setup-email.bat`** in the Remindate folder. It moves the file to
+`.github/workflows/email-reminders.yml`, commits it and pushes it to GitHub.
 
-Then commit and push like you normally do:
+(By hand instead, in the Remindate folder:
+`mkdir .github\workflows`, `move scripts\email-reminders.yml .github\workflows\`,
+then commit and push.)
 
-```
-git add .github/workflows/email-reminders.yml scripts/email-reminders.mjs EMAIL-SETUP.md app.js index.html style.css
-git commit -m "Email notifications"
-git push
-```
+Check it worked: on <https://github.com/Vharixce/Remindate/actions> you should now see
+**Remindate email reminders** in the list on the left.
+
+If the push is refused with *"refusing to allow ... to create or update workflow"*, the login
+git uses for GitHub may not change workflows. Upload the file on the website instead:
+open the repo on github.com → **Add file → Create new file** → name it
+`.github/workflows/email-reminders.yml` → paste the contents of `email-reminders.yml` → **Commit**.
 
 ## 5. Turn on sync in Remindate
 

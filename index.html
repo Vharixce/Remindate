@@ -39,23 +39,17 @@
             </div>
 
             <div class="sidebar-footer">
-                <button class="footer-btn" id="pickNotesFileBtn" title="Choose notes.json in your synced folder">📁 Choose notes.json</button>
-                <button class="footer-btn" id="loadFromDirBtn" title="Try loading notes.json from the app folder">↻ Load from folder</button>
+                <button class="footer-btn" id="exportBtn" title="Download all your notes as a .json file">⬇ Save .json</button>
+                <button class="footer-btn" id="importBtn" title="Load notes from a .json file">⬆ Upload .json</button>
+                <input type="file" id="importFile" accept=".json,application/json,text/plain" hidden>
             </div>
             <div class="sidebar-footer">
-                <button class="footer-btn" id="saveToFileBtn" title="Save directly to the selected notes.json file">💾 Save to file</button>
-                <button class="footer-btn" id="exportBtn" title="Download a backup of all notes">↓ Backup</button>
-            </div>
-            <div class="sidebar-footer">
-                <button class="footer-btn" id="importBtn" title="Restore a backup">↑ Restore</button>
                 <button class="footer-btn" id="trashBtn" title="Recently deleted notes">🗑 Trash</button>
-                <input type="file" id="importFile" accept="application/json,.json" hidden>
             </div>
             <div class="sidebar-footer">
                 <button class="footer-btn" id="githubOpenBtn">GitHub Sync settings</button>
                 <button class="footer-btn" id="githubSyncBtn">Sync now</button>
             </div>
-            <div class="sync-status" id="syncStatus">No file linked • Local storage only</div>
             <div class="github-status" id="githubStatus">GitHub: not configured</div>
         </aside>
 
@@ -117,12 +111,7 @@
                                 </span>
                             </div>
                             <div class="step-row">
-                                <span title="How many extra times the alarm rings (snooze)">Alarm repeats</span>
-                                <input type="range" id="repeatCount" min="0" max="10" value="0">
-                                <span class="step-value" id="repeatCountLabel">0</span>
-                            </div>
-                            <div class="step-row">
-                                <span>Snooze (min)</span>
+                                <span title="How long “Snooze” waits before the alarm rings again">Snooze (min)</span>
                                 <input type="range" id="snoozeMinutes" min="1" max="60" value="5">
                                 <span class="step-value" id="snoozeMinutesLabel">5</span>
                             </div>
@@ -295,12 +284,7 @@
                 <div class="note-colors" id="planNoteColors"></div>
             </div>
             <div class="step-row">
-                <span title="How many extra times the alarm rings (snooze)">Alarm repeats</span>
-                <input type="range" id="planFromTreeRepeat" min="0" max="10" value="0">
-                <span class="step-value" id="planFromTreeRepeatLabel">0</span>
-            </div>
-            <div class="step-row">
-                <span>Snooze (min)</span>
+                <span title="How long “Snooze” waits before the alarm rings again">Snooze (min)</span>
                 <input type="range" id="planFromTreeSnooze" min="1" max="60" value="5">
                 <span class="step-value" id="planFromTreeSnoozeLabel">5</span>
             </div>
