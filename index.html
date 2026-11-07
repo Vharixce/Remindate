@@ -402,6 +402,7 @@
             </div>
             <label class="check-row"><input type="checkbox" id="emailRemember" checked> Use this address for other notes too</label>
             <div class="email-status" id="emailStatus"></div>
+            <button class="btn email-help-btn" id="emailHelpBtn" type="button">❓ How to setup: Google Apps Script Emails</button>
             <div class="modal-actions">
                 <button class="btn" id="emailTurnOff" type="button">Turn off</button>
                 <button class="btn" id="emailCancel" type="button">Cancel</button>
@@ -430,6 +431,81 @@
             <div class="action-sheet-title" id="actionSheetTitle"></div>
             <div class="action-sheet-buttons" id="actionSheetButtons"></div>
             <button class="btn action-cancel" id="actionSheetCancel" type="button">Cancel</button>
+        </div>
+    </div>
+
+    <!-- How to set up the Google Apps Script that sends the emails -->
+    <div class="modal" id="emailHelpModal">
+        <div class="modal-backdrop" id="emailHelpBackdrop"></div>
+        <div class="modal-content email-help-modal">
+            <div class="modal-header">
+                <div>How to setup: Google Apps Script Emails</div>
+                <button class="icon-btn" id="emailHelpClose" title="Close">&times;</button>
+            </div>
+            <div class="help-body">
+                <p class="help-intro">Remindate is a website without its own server, so a small script in <b>your Google account</b> sends the emails. Every minute it reads your synced notes from GitHub and emails the ones that are due, from your own Gmail. You only set this up once; after that it also works when your computer and phone are off.</p>
+
+                <ol class="help-steps">
+                    <li>
+                        <b>Turn on GitHub Sync in Remindate.</b>
+                        Open <i>GitHub Sync settings</i> (bottom of the explorer), fill it in and tick <i>Sync automatically after changes</i>. The script only sees notes that are on GitHub.
+                        <div class="help-note" id="emailHelpRepo"></div>
+                    </li>
+                    <li>
+                        <b>Create the script.</b>
+                        Go to <a href="https://script.google.com/home/projects/create" target="_blank" rel="noopener noreferrer">script.google.com → New project</a> (sign in with the Google account that should send the emails). Click the title <i>Untitled project</i> and name it <i>Remindate email reminders</i>.
+                    </li>
+                    <li>
+                        <b>Paste the code.</b>
+                        Select all the example code in the editor and delete it, then paste the Remindate code:
+                        <div class="help-code-actions">
+                            <button class="btn btn-primary" id="emailHelpCopy" type="button">📋 Copy code</button>
+                            <button class="btn" id="emailHelpToggleCode" type="button">Show code</button>
+                            <span class="help-copy-status" id="emailHelpCopyStatus"></span>
+                        </div>
+                        <textarea class="help-code" id="emailHelpCode" readonly hidden spellcheck="false"></textarea>
+                        Press <kbd>Ctrl</kbd>+<kbd>S</kbd> to save.
+                    </li>
+                    <li>
+                        <b>Check the time zone.</b>
+                        Click the gear icon <i>Project Settings</i> on the left. The time zone should be yours (for the Netherlands: <i>(GMT+01:00) Central European Time – Amsterdam/Brussels</i>).
+                    </li>
+                    <li>
+                        <b>Add your GitHub token.</b>
+                        Still in Project Settings, scroll down to <i>Script properties</i> → <i>Add script property</i>.
+                        Property: <code>GITHUB_TOKEN</code> · Value: your GitHub token (the same one as in Remindate's GitHub Sync settings). Click <i>Save script properties</i>.
+                    </li>
+                    <li>
+                        <b>Start it.</b>
+                        Go back to the editor (<i>&lt;&gt;</i> icon). At the top, choose the function <code>setup</code> and press <i>Run</i>.
+                        Google asks for permission: <i>Review permissions</i> → choose your account → <i>Advanced</i> → <i>Go to Remindate email reminders (unsafe)</i> → <i>Allow</i>.
+                        <span class="help-note">“Unsafe” only means Google hasn't reviewed it: it's your own script. It needs: send email as you, connect to GitHub, run every minute.</span>
+                        The log should say <i>“Setup done. Found … notes … Checking every minute.”</i>
+                        <span class="help-note">Error “Er is een serverfout opgetreden / A server error occurred”? That happens right after allowing. Just press <i>Run</i> again.</span>
+                    </li>
+                    <li>
+                        <b>Send a test email.</b>
+                        Choose the function <code>sendTestEmail</code> and press <i>Run</i>. Check your inbox (and the spam folder the first time).
+                    </li>
+                </ol>
+
+                <div class="help-done">✅ That's it. In Remindate, tick <b>Send Email Notification</b> on a note and make sure it's synced. The email arrives within about a minute of the note's time.</div>
+
+                <details class="help-trouble">
+                    <summary>Something not working?</summary>
+                    <ul>
+                        <li><b>“Add the script property GITHUB_TOKEN first”</b>: step 5 is missing.</li>
+                        <li><b>“GitHub refused the token”</b>: the token expired or can't read your data repo. Make a new one and paste it in the script property.</li>
+                        <li><b>“notes.json not found”</b>: GitHub Sync isn't on yet, or the repo name in the code doesn't match. Press <i>Sync now</i> in Remindate.</li>
+                        <li><b>No emails</b>: in Apps Script, <i>Triggers</i> should show <code>checkReminders</code>, and <i>Executions</i> a run every minute. If not, run <code>setup</code> again.</li>
+                        <li>A normal Gmail account can send about 100 emails a day.</li>
+                    </ul>
+                </details>
+            </div>
+            <div class="modal-actions">
+                <a class="btn" href="https://script.google.com/home" target="_blank" rel="noopener noreferrer">Open Google Apps Script</a>
+                <button class="btn btn-primary" id="emailHelpDone" type="button">Got it</button>
+            </div>
         </div>
     </div>
 

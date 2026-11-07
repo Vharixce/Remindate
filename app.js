@@ -2312,7 +2312,7 @@
         if (!emailTarget.isPlan && !note.scheduledAt) notes.push('This note has no date yet: pick a date and time in the Scheduled card.');
         if (!sync) notes.push('Emails are sent via GitHub using your synced notes, so turn on <b>GitHub Sync</b> (with automatic sync).');
         else if (!githubConfig.autoSync) notes.push('Turn on <b>automatic sync</b> in GitHub Sync settings, or press “Sync now” after changes, so GitHub knows about this note.');
-        notes.push('One-time setup: the email workflow must be set up on GitHub (see <b>EMAIL-SETUP.md</b> in the Remindate folder). Emails can arrive a few minutes late.');
+        notes.push('Emails are sent by the “Remindate email reminders” Google Apps Script, which checks your synced notes every minute (see <b>EMAIL-SETUP.md</b>).');
         $('emailStatus').innerHTML = notes.map((t) => `<div>• ${t}</div>`).join('');
         openModal('emailModal');
         setTimeout(() => $('emailAddress').focus(), 30);
@@ -2354,6 +2354,78 @@
         if (state.prefs.activeTab === 'calendar') renderCalendar();
     });
     $('emailSettingsLink').addEventListener('click', () => openEmailModal());
+
+    /* ---- "How to setup: Google Apps Script Emails" ---- */
+    let emailScriptCode = null;
+
+    // The script lives next to the app (scripts/email-reminders.gs). The repo it reads
+    // is filled in from your GitHub Sync settings, so the copied code is ready to use.
+    async function loadEmailScriptCode() {
+        if (emailScriptCode === null) {
+            try {
+                const res = await fetch('scripts/email-reminders.gs', { cache: 'no-store' });
+                if (!res.ok) throw new Error(String(res.status));
+                emailScriptCode = await res.text();
+            } catch (_) {
+                emailScriptCode = '';
+            }
+        }
+        let code = emailScriptCode;
+        if (code && githubConfigured()) {
+            code = code
+                .replace(/dataRepo: '[^']*'/, `dataRepo: '${githubConfig.owner}/${githubConfig.repo}'`)
+                .replace(/dataPath: '[^']*'/, `dataPath: '${githubConfig.path || 'notes.json'}'`)
+                .replace(/appUrl: '[^']*'/, `appUrl: '${location.protocol.startsWith('http') ? location.href.split(/[?#]/)[0] : 'https://vharixce.github.io/Remindate/'}'`);
+        }
+        return code;
+    }
+
+    async function openEmailHelp() {
+        $('emailHelpRepo').innerHTML = githubConfigured()
+            ? `✔ GitHub Sync is set up: <code>${escapeHtml(githubConfig.owner)}/${escapeHtml(githubConfig.repo)}/${escapeHtml(githubConfig.path || 'notes.json')}</code>. The code you copy below already uses this repo.`
+            : '⚠ GitHub Sync is not set up on this device yet. Do that first, then come back here, so the copied code uses your repo.';
+        $('emailHelpCopyStatus').textContent = '';
+        $('emailHelpCode').hidden = true;
+        $('emailHelpToggleCode').textContent = 'Show code';
+        openModal('emailHelpModal');
+        const code = await loadEmailScriptCode();
+        $('emailHelpCode').value = code || '// Could not load the code here.\n// Open scripts/email-reminders.gs in the Remindate folder and copy everything in it.';
+        $('emailHelpCopy').disabled = !code;
+    }
+
+    async function copyEmailScriptCode() {
+        const code = await loadEmailScriptCode();
+        if (!code) return;
+        let ok = false;
+        try {
+            await navigator.clipboard.writeText(code);
+            ok = true;
+        } catch (_) {
+            // older browsers / no clipboard permission: copy via a selected text box
+            const box = $('emailHelpCode');
+            const wasHidden = box.hidden;
+            box.hidden = false;
+            box.value = code;
+            box.focus();
+            box.select();
+            try { ok = document.execCommand('copy'); } catch (__) { ok = false; }
+            box.hidden = wasHidden;
+        }
+        $('emailHelpCopyStatus').textContent = ok ? '✔ Copied! Paste it in the Apps Script editor.' : 'Select the code below and copy it with Ctrl+C.';
+        if (!ok) { $('emailHelpCode').hidden = false; $('emailHelpToggleCode').textContent = 'Hide code'; }
+    }
+
+    $('emailHelpBtn').addEventListener('click', openEmailHelp);
+    $('emailHelpCopy').addEventListener('click', copyEmailScriptCode);
+    $('emailHelpToggleCode').addEventListener('click', () => {
+        const box = $('emailHelpCode');
+        box.hidden = !box.hidden;
+        $('emailHelpToggleCode').textContent = box.hidden ? 'Show code' : 'Hide code';
+    });
+    const closeEmailHelp = () => $('emailHelpModal').classList.remove('active');
+    $('emailHelpClose').addEventListener('click', closeEmailHelp);
+    $('emailHelpDone').addEventListener('click', closeEmailHelp);
+    $('emailHelpBackdrop').addEventListener('click', closeEmailHelp);
     $('emailSave').addEventListener('click', saveEmailSettings);
     $('emailAddress').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); saveEmailSettings(); } });
     $('emailCancel').addEventListener('click', closeEmailModal);
@@ -3777,6 +3849,7 @@
     function closeModals() {
         if (dialogResolve) { finishDialog(false); return; }
         if ($('voiceModal').classList.contains('active')) resetVoiceModal();
+        if ($('emailHelpModal').classList.contains('active')) { $('emailHelpModal').classList.remove('active'); return; }
         if ($('emailModal').classList.contains('active')) { closeEmailModal(); return; }
         document.querySelectorAll('.modal.active').forEach((m) => m.classList.remove('active'));
     }
@@ -4190,6 +4263,9 @@
             content: encodeGithubFile(JSON.stringify(payload, null, 2)),
             ...(sha ? { sha } : {})
         });
+        if (!result || !result.content) {
+            throw new Error(`GitHub can't find ${githubConfig.owner}/${githubConfig.repo}, or your token has no write access to it`);
+        }
         githubConfig.sha = result.content.sha;
         githubConfig.remoteUpdatedAt = payload.updatedAt;
     }
