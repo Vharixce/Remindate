@@ -3246,6 +3246,37 @@
             pinch = { s0: z.scale, tx0: z.tx, ty0: z.ty, mid0: mid, d0: dist };
         }
 
+        // Middle mouse button: drag to move around while zoomed in (never draws)
+        let pan = null;
+        viewport.addEventListener('pointerdown', (e) => {
+            if (e.pointerType !== 'mouse' || e.button !== 1) return;
+            e.stopPropagation();
+            e.preventDefault();
+            if (z.scale <= 1) return;
+            pan = { id: e.pointerId, x: e.clientX, y: e.clientY, tx: z.tx, ty: z.ty };
+            try { viewport.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+            viewport.classList.add('panning');
+        }, true);
+        viewport.addEventListener('pointermove', (e) => {
+            if (!pan || e.pointerId !== pan.id) return;
+            e.stopPropagation();
+            e.preventDefault();
+            z.tx = pan.tx + (e.clientX - pan.x);
+            z.ty = pan.ty + (e.clientY - pan.y);
+            apply();
+        }, true);
+        const endPan = (e) => {
+            if (!pan || e.pointerId !== pan.id) return;
+            e.stopPropagation();
+            pan = null;
+            viewport.classList.remove('panning');
+        };
+        viewport.addEventListener('pointerup', endPan, true);
+        viewport.addEventListener('pointercancel', endPan, true);
+        // no auto-scroll circle / paste-on-middle-click in the drawing area
+        viewport.addEventListener('mousedown', (e) => { if (e.button === 1) e.preventDefault(); });
+        viewport.addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); });
+
         // capture phase: runs before the canvas' own drawing handlers
         viewport.addEventListener('pointerdown', (e) => {
             if (e.pointerType !== 'touch') return;

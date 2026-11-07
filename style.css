@@ -1712,3 +1712,6 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 /* sharp zoomed-in grid (drawn on top, clicks go to the grid underneath) */
 .grid-detail { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; }
 .grid-detail[hidden] { display: none; }
+
+/* moving the zoomed-in view with the middle mouse button */
+.zoom-viewport.panning, .zoom-viewport.panning canvas { cursor: grabbing !important; }
