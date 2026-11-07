@@ -13,7 +13,8 @@
         deleted: 'remindate.deleted.v1',
         trash: 'remindate.trash.v1',
         updatedAt: 'remindate.updatedAt.v1',
-        github: 'remindate.github.v1'
+        github: 'remindate.github.v1',
+        server: 'remindate.server.v1'
     };
 
 
@@ -151,12 +152,13 @@
         note.grids = note.grids && typeof note.grids === 'object' ? note.grids : {};
     }
 
+    let syncReady = false; // set once the sync code below has loaded
     // Every local change records "now" as the time of the latest local version
     function markChanged() {
         state.updatedAt = new Date().toISOString();
         writeJSON(STORAGE.updatedAt, state.updatedAt);
         writeJSON(STORAGE.deleted, state.deleted);
-        if (typeof updateGithubStatus === 'function' && !githubBusy) updateGithubStatus();
+        if (syncReady && !githubBusy) updateGithubStatus();
     }
     const saveNotes = () => {
         writeJSON(STORAGE.notes, state.notes);
@@ -4058,12 +4060,21 @@
         const el = $('githubStatus');
         if (!el) return;
         if (message) { el.textContent = message; return; }
-        if (!githubConfigured()) { el.textContent = 'GitHub: not configured'; el.title = ''; return; }
-        const where = `${githubConfig.owner}/${githubConfig.repo}/${githubConfig.path}`;
-        el.textContent = githubConfig.lastSyncAt
-            ? `GitHub: synced ${shortTime(githubConfig.lastSyncAt)} • last change ${shortTime(laterIso(state.updatedAt, githubConfig.remoteUpdatedAt))}`
-            : `GitHub: ${where} • not synced yet`;
-        el.title = `${where}\nLast sync: ${shortTime(githubConfig.lastSyncAt)}\nLast change on this device: ${shortTime(state.updatedAt)}\nLatest version on GitHub: ${shortTime(githubConfig.remoteUpdatedAt)}`;
+        const parts = [], tips = [];
+        if (githubConfigured()) {
+            const where = `${githubConfig.owner}/${githubConfig.repo}/${githubConfig.path}`;
+            parts.push(githubConfig.lastSyncAt
+                ? `GitHub: synced ${shortTime(githubConfig.lastSyncAt)} • last change ${shortTime(laterIso(state.updatedAt, githubConfig.remoteUpdatedAt))}`
+                : `GitHub: ${where} • not synced yet`);
+            tips.push(`GitHub: ${where}\nLast sync: ${shortTime(githubConfig.lastSyncAt)}\nLatest version on GitHub: ${shortTime(githubConfig.remoteUpdatedAt)}`);
+        }
+        if (serverConfigured()) {
+            parts.push(serverConfig.lastSyncAt ? `Server: synced ${shortTime(serverConfig.lastSyncAt)}` : 'Server: not synced yet');
+            tips.push(`Server: ${serverConfig.url}\nLast sync: ${shortTime(serverConfig.lastSyncAt)}\nLatest version on the server: ${shortTime(serverConfig.remoteUpdatedAt)}`);
+        }
+        if (!parts.length) { el.textContent = 'Sync: not configured'; el.title = ''; return; }
+        el.textContent = parts.join(' • ');
+        el.title = `${tips.join('\n\n')}\nLast change on this device: ${shortTime(state.updatedAt)}`;
     }
 
     function showGithubSettings() {
@@ -4270,19 +4281,105 @@
         githubConfig.remoteUpdatedAt = payload.updatedAt;
     }
 
-    // Sync = 1) fetch the newest version from GitHub, 2) merge it with this
-    // device, 3) push the result back (only if GitHub doesn't have it yet).
-    async function syncGithub(options = {}) {
-        if (!githubConfigured()) return;
-        if (githubBusy) { githubPending = true; return; }
+    /* ---------------- Server sync (your own server / paid hosting) ----------------
+     * Protocol (kept tiny so any server can do it):
+     *   GET  <url>  -> 200 + the notes.json content (ETag header = version), or 404 when empty
+     *   PUT  <url>  -> stores the JSON body; with "If-Match: <etag>" it answers 412 if
+     *                  someone else saved in between. Answers with the new ETag.
+     * Auth: "Authorization: Bearer <token>". scripts/remindate-sync-server.js does exactly this. */
+    let serverConfig = readJSON(STORAGE.server, {});
+    const serverConfigured = () => !!serverConfig.url;
+
+    async function serverRequest(method, body, ifMatch) {
+        let response;
+        try {
+            response = await fetch(serverConfig.url, {
+                method,
+                cache: 'no-store',
+                headers: {
+                    Accept: 'application/json',
+                    ...(serverConfig.token ? { Authorization: `Bearer ${serverConfig.token}` } : {}),
+                    ...(body ? { 'Content-Type': 'application/json' } : {}),
+                    ...(ifMatch ? { 'If-Match': ifMatch } : {})
+                },
+                ...(body ? { body: JSON.stringify(body) } : {})
+            });
+        } catch (err) {
+            throw new Error(location.protocol === 'https:' && /^http:/i.test(serverConfig.url)
+                ? 'the server address must start with https://'
+                : "can't reach the server (is it online, and does it allow this website (CORS)?)");
+        }
+        if (response.status === 404 && method === 'GET') return null;
+        if (!response.ok) {
+            const error = new Error(response.status === 401 || response.status === 403
+                ? 'the server refused the token'
+                : response.status === 412 || response.status === 409
+                    ? 'someone else saved at the same time'
+                    : `server error ${response.status}`);
+            error.status = response.status;
+            throw error;
+        }
+        const text = await response.text();
+        return { etag: response.headers.get('ETag'), text };
+    }
+
+    const syncProviders = {
+        github: {
+            id: 'github',
+            label: 'GitHub',
+            configured: () => githubConfigured(),
+            cfg: () => githubConfig,
+            save: () => writeJSON(STORAGE.github, githubConfig),
+            async fetch() {
+                const r = await fetchRemote();
+                return r && { rev: r.sha, data: r.data };
+            },
+            async push(snap, rev) { await pushRemote(snap, rev); return githubConfig.sha; },
+            setRev(rev) { githubConfig.sha = rev; },
+            isConflict: (err) => err.status === 409 || err.status === 422
+        },
+        server: {
+            id: 'server',
+            label: 'Server',
+            configured: () => serverConfigured(),
+            cfg: () => serverConfig,
+            save: () => writeJSON(STORAGE.server, serverConfig),
+            async fetch() {
+                const r = await serverRequest('GET');
+                if (!r) return null;
+                const data = r.text && r.text.trim() ? JSON.parse(r.text) : [];
+                return { rev: r.etag || null, data };
+            },
+            async push(snap, rev) {
+                const payload = {
+                    app: 'Remindate', version: 1,
+                    updatedAt: snap.updatedAt || new Date().toISOString(),
+                    folders: snap.folders, notes: snap.notes, deleted: snap.deleted
+                };
+                const r = await serverRequest('PUT', payload, rev);
+                serverConfig.remoteUpdatedAt = payload.updatedAt;
+                return r.etag || null;
+            },
+            setRev(rev) { serverConfig.etag = rev; },
+            isConflict: (err) => err.status === 412 || err.status === 409
+        }
+    };
+    const configuredProviders = () => Object.values(syncProviders).filter((p) => p.configured());
+
+    // Sync = 1) fetch the newest version, 2) merge it with this device,
+    // 3) push the result back (only if the other side doesn't have it yet).
+    let syncPending = new Set();
+    async function runSync(p, options = {}) {
+        if (!p.configured()) return;
+        if (githubBusy) { syncPending.add(p.id); return; }
         githubBusy = true;
         let pulled = false, pushed = false;
         try {
             if (options.flush !== false) flushEditor();
             for (let attempt = 0; attempt < 4; attempt++) {
-                updateGithubStatus('GitHub: fetching…');
+                updateGithubStatus(`${p.label}: fetching…`);
                 const local = localSnapshot();
-                const remote = await fetchRemote();
+                const remote = await p.fetch();
                 // You edited something while we were fetching: start over with the new data
                 if (state.updatedAt !== local.updatedAt) continue;
 
@@ -4291,69 +4388,155 @@
                 if (remote) {
                     remoteSnap = normalizeSnapshot(remote.data);
                     merged = mergeSnapshots(local, remoteSnap);
-                    githubConfig.remoteUpdatedAt = remoteSnap.updatedAt;
+                    p.cfg().remoteUpdatedAt = remoteSnap.updatedAt;
                 }
                 if (snapshotKey(merged) !== snapshotKey(local)) {
                     applySnapshot(merged);
                     pulled = true;
                 }
                 if (!remote || snapshotKey(merged) !== snapshotKey(remoteSnap)) {
-                    updateGithubStatus('GitHub: pushing…');
+                    updateGithubStatus(`${p.label}: pushing…`);
                     try {
-                        await pushRemote(merged, remote && remote.sha);
+                        p.setRev(await p.push(merged, remote && remote.rev));
                         pushed = true;
                     } catch (err) {
-                        // Someone else pushed in between (409/422): fetch again and retry
-                        if (err.status === 409 || err.status === 422) continue;
+                        // Someone else pushed in between: fetch again and retry
+                        if (p.isConflict(err)) continue;
                         throw err;
                     }
                 } else {
-                    githubConfig.sha = remote.sha;
+                    p.setRev(remote.rev);
                 }
-                githubConfig.lastSyncAt = new Date().toISOString();
-                writeJSON(STORAGE.github, githubConfig);
+                p.cfg().lastSyncAt = new Date().toISOString();
+                p.save();
                 updateGithubStatus();
+                // New data came in: pass it on to the other sync targets too
+                if (pulled) configuredProviders().forEach((o) => { if (o !== p) syncPending.add(o.id); });
                 if (!options.silent) {
-                    toast(pulled && pushed ? 'Fetched changes from GitHub and pushed yours'
-                        : pulled ? 'Fetched the latest changes from GitHub'
-                            : pushed ? 'Pushed your changes to GitHub'
-                                : 'Already up to date with GitHub');
+                    toast(pulled && pushed ? `Fetched changes from ${p.label} and pushed yours`
+                        : pulled ? `Fetched the latest changes from ${p.label}`
+                            : pushed ? `Pushed your changes to ${p.label}`
+                                : `Already up to date with ${p.label}`);
                 }
                 return;
             }
             throw new Error('the data kept changing during sync, please try again');
         } catch (err) {
-            console.error('GitHub sync failed', err);
-            updateGithubStatus('GitHub: sync failed');
-            toast(`GitHub sync failed: ${err.message}`);
+            console.error(`${p.label} sync failed`, err);
+            updateGithubStatus(`${p.label}: sync failed`);
+            toast(`${p.label} sync failed: ${err.message}`);
         } finally {
             githubBusy = false;
-            if (githubPending) {
-                githubPending = false;
-                syncGithub({ silent: true, flush: false });
+            const next = [...syncPending][0];
+            if (next) {
+                syncPending.delete(next);
+                runSync(syncProviders[next], { silent: true, flush: false });
             }
         }
     }
 
-    function scheduleGithubSave() {
-        if (!githubConfig.autoSync || !githubConfigured()) return;
-        clearTimeout(githubTimer);
-        githubTimer = setTimeout(() => syncGithub({ silent: true }), 1500);
+    const syncGithub = (options) => runSync(syncProviders.github, options);
+    const autoProviders = () => configuredProviders().filter((p) => p.cfg().autoSync);
+    function syncAll(providers, options = {}) {
+        const [first, ...rest] = providers;
+        if (!first) return;
+        rest.forEach((p) => syncPending.add(p.id));
+        runSync(first, options);
     }
 
-    // With auto-sync on, also fetch from GitHub regularly and when you come back to the tab
+    function scheduleGithubSave() {
+        if (!autoProviders().length) return;
+        clearTimeout(githubTimer);
+        githubTimer = setTimeout(() => syncAll(autoProviders(), { silent: true }), 1500);
+    }
+
+    // With auto-sync on, also fetch regularly and when you come back to the tab
     let lastAutoPull = 0;
     function autoPull() {
-        if (!githubConfig.autoSync || !githubConfigured() || document.hidden) return;
+        if (!autoProviders().length || document.hidden) return;
         if (Date.now() - lastAutoPull < 30000) return;
         lastAutoPull = Date.now();
-        syncGithub({ silent: true, flush: true });
+        syncAll(autoProviders(), { silent: true, flush: true });
     }
     window.addEventListener('focus', autoPull);
     document.addEventListener('visibilitychange', autoPull);
     setInterval(autoPull, 120000);
 
-    $('githubOpenBtn').addEventListener('click', showGithubSettings);
+    /* Sync Settings: choose GitHub Sync or Server Sync */
+    function showSyncChooser() {
+        $('syncChooseGithubState').textContent = githubConfigured() ? (githubConfig.autoSync ? 'On • automatic' : 'On') : 'Not set up';
+        $('syncChooseServerState').textContent = serverConfigured() ? (serverConfig.autoSync ? 'On • automatic' : 'On') : 'Not set up';
+        openModal('syncChooserModal');
+    }
+    $('syncChooserClose').addEventListener('click', closeModals);
+    $('syncChooserBackdrop').addEventListener('click', closeModals);
+    $('syncChooseGithub').addEventListener('click', () => { $('syncChooserModal').classList.remove('active'); showGithubSettings(); });
+    $('syncChooseServer').addEventListener('click', () => { $('syncChooserModal').classList.remove('active'); showServerSettings(); });
+
+    function showServerSettings() {
+        $('srvUrl').value = serverConfig.url || '';
+        $('srvToken').value = serverConfig.token || '';
+        $('srvAutoSync').checked = !!serverConfig.autoSync;
+        openModal('serverModal');
+    }
+    function readServerForm() {
+        return {
+            url: $('srvUrl').value.trim(),
+            token: $('srvToken').value.trim(),
+            autoSync: $('srvAutoSync').checked,
+            // a different address is a different file: forget the old version info
+            etag: serverConfig.url === $('srvUrl').value.trim() ? serverConfig.etag || null : null,
+            lastSyncAt: serverConfig.url === $('srvUrl').value.trim() ? serverConfig.lastSyncAt || null : null,
+            remoteUpdatedAt: serverConfig.url === $('srvUrl').value.trim() ? serverConfig.remoteUpdatedAt || null : null
+        };
+    }
+    function validServerUrl(url) {
+        try {
+            const u = new URL(url);
+            return u.protocol === 'https:' || (u.protocol === 'http:' && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname));
+        } catch { return false; }
+    }
+    $('serverClose').addEventListener('click', closeModals);
+    $('serverBackdrop').addEventListener('click', closeModals);
+    $('serverSaveBtn').addEventListener('click', () => {
+        const next = readServerForm();
+        if (!validServerUrl(next.url)) { toast('Enter the full server address, starting with https://'); return; }
+        serverConfig = next;
+        writeJSON(STORAGE.server, serverConfig);
+        updateGithubStatus();
+        closeModals();
+        toast('Server settings saved');
+        if (serverConfig.autoSync) runSync(syncProviders.server, { silent: false });
+    });
+    $('serverClearBtn').addEventListener('click', () => {
+        serverConfig = {};
+        localStorage.removeItem(STORAGE.server);
+        $('srvUrl').value = '';
+        $('srvToken').value = '';
+        $('srvAutoSync').checked = false;
+        updateGithubStatus();
+        toast('Server settings cleared from this browser');
+    });
+    $('serverTestBtn').addEventListener('click', async () => {
+        const prior = serverConfig;
+        serverConfig = readServerForm();
+        if (!validServerUrl(serverConfig.url)) {
+            serverConfig = prior;
+            toast('Enter the full server address, starting with https://');
+            return;
+        }
+        try {
+            const r = await serverRequest('GET');
+            if (r && r.text.trim()) JSON.parse(r.text);
+            toast(r ? 'Server connection works' : 'Server connection works (no notes stored there yet)');
+        } catch (err) {
+            toast(`Connection failed: ${err.message.replace(/^Unexpected.*/, 'the server did not answer with JSON')}`);
+        } finally {
+            serverConfig = prior;
+        }
+    });
+
+    $('githubOpenBtn').addEventListener('click', showSyncChooser);
     $('githubClose').addEventListener('click', closeModals);
     $('githubBackdrop').addEventListener('click', closeModals);
     $('githubSaveBtn').addEventListener('click', () => {
@@ -4407,8 +4590,10 @@
         }
     });
     $('githubSyncBtn').addEventListener('click', () => {
-        if (!githubConfigured()) return showGithubSettings();
-        syncGithub();
+        const list = configuredProviders();
+        if (!list.length) return showSyncChooser();
+        flushEditor();
+        syncAll(list);
     });
 
     /* ---------------- back-up ---------------- */
@@ -4983,6 +5168,17 @@
             e.preventDefault();
             newNote();
         }
+        // Ctrl+Z / Cmd+Z undoes the last stroke in draw mode and the last fill in grid mode
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
+            const mode = state.prefs.mode;
+            const typing = e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]');
+            const modalOpen = document.querySelector('.modal.active');
+            if ((mode === 'draw' || mode === 'grid') && state.prefs.activeTab !== 'calendar' && !modalOpen
+                && !(typing && typing.offsetParent !== null) && state.currentNoteId) {
+                e.preventDefault();
+                $(mode === 'draw' ? 'toolUndo' : 'gridUndo').click();
+            }
+        }
         if (e.key === 'Escape') closeModals();
     });
 
@@ -5019,9 +5215,10 @@
         if (state.prefs.activeTab === 'calendar') renderCalendar();
     });
 
+    syncReady = true;
     updateGithubStatus();
-    if (githubConfig.autoSync && githubConfigured()) {
-        setTimeout(() => syncGithub({ silent: true }), 400);
+    if (autoProviders().length) {
+        setTimeout(() => syncAll(autoProviders(), { silent: true }), 400);
     }
     window.Remindate = { exportData, importData };
 })();

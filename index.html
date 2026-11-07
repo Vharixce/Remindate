@@ -47,10 +47,10 @@
                 <button class="footer-btn" id="trashBtn" title="Recently deleted notes">🗑 Trash</button>
             </div>
             <div class="sidebar-footer">
-                <button class="footer-btn" id="githubOpenBtn">GitHub Sync settings</button>
+                <button class="footer-btn" id="githubOpenBtn">Sync Settings</button>
                 <button class="footer-btn" id="githubSyncBtn">Sync now</button>
             </div>
-            <div class="github-status" id="githubStatus">GitHub: not configured</div>
+            <div class="github-status" id="githubStatus">Sync: not configured</div>
         </aside>
 
         <div class="sidebar-splitter" id="sidebarSplitter" title="Drag to resize the sidebar"></div>
@@ -561,6 +561,58 @@
                 <button class="btn btn-primary" id="githubSaveBtn">Save</button>
             </div>
             <div class="github-tip">Your token is stored only in this browser local storage.</div>
+        </div>
+    </div>
+
+    <!-- Sync Settings: choose how to sync -->
+    <div class="modal" id="syncChooserModal">
+        <div class="modal-backdrop" id="syncChooserBackdrop"></div>
+        <div class="modal-content sync-chooser">
+            <div class="modal-header">
+                <div>Sync Settings</div>
+                <button class="icon-btn" id="syncChooserClose" title="Close">&times;</button>
+            </div>
+            <div class="github-help">Choose where your notes.json is kept in sync. You can use one or both; “Sync now” syncs everything that is set up.</div>
+            <button class="sync-choice" id="syncChooseGithub" type="button">
+                <span class="sync-choice-icon">🐙</span>
+                <span class="sync-choice-text"><b>GitHub Sync</b><small>Free. Stores notes.json in a private GitHub repo. Needed for the email reminders.</small></span>
+                <span class="sync-choice-state" id="syncChooseGithubState"></span>
+            </button>
+            <button class="sync-choice" id="syncChooseServer" type="button">
+                <span class="sync-choice-icon">🖥️</span>
+                <span class="sync-choice-text"><b>Server Sync</b><small>Your own (paid) server or hosting, e.g. a VPS, Railway or Render, running the Remindate sync server.</small></span>
+                <span class="sync-choice-state" id="syncChooseServerState"></span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Server Sync Modal -->
+    <div class="modal" id="serverModal">
+        <div class="modal-backdrop" id="serverBackdrop"></div>
+        <div class="modal-content github-modal">
+            <div class="modal-header">
+                <div>Server Sync settings</div>
+                <button class="icon-btn" id="serverClose" title="Close">&times;</button>
+            </div>
+            <div class="github-help">
+                Sync notes.json with your own server. Put <code>scripts/remindate-sync-server.js</code> on any paid host that runs Node.js (VPS, Railway, Render, …) and fill in its address and token below. See <code>SERVER-SYNC.md</code> for the steps.
+                The address must use <code>https://</code>.
+            </div>
+            <div class="plan-row">
+                <label for="srvUrl">Server address</label>
+                <input type="url" id="srvUrl" placeholder="https://your-server.example.com/notes.json">
+            </div>
+            <div class="plan-row">
+                <label for="srvToken">Access token</label>
+                <input type="password" id="srvToken" placeholder="the SYNC_TOKEN you set on the server">
+            </div>
+            <label class="check-row"><input type="checkbox" id="srvAutoSync"> Sync automatically after changes</label>
+            <div class="modal-actions">
+                <button class="btn" id="serverTestBtn">Test connection</button>
+                <button class="btn" id="serverClearBtn">Clear</button>
+                <button class="btn btn-primary" id="serverSaveBtn">Save</button>
+            </div>
+            <div class="github-tip">Your token is stored only in this browser local storage. Email reminders still read from GitHub.</div>
         </div>
     </div>
 
