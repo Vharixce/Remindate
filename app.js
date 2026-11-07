@@ -942,6 +942,7 @@
         editorEl.innerHTML = sanitizeHtml(note.html);   // (also turns web addresses into links)
         decorateVoiceChips();
         $('gridType').value = currentGridType(note);
+        updateGridControls(note);
         $('noteFolder').innerHTML = folderOptions(note.folderId);
         updateScheduleUi(note);
 
@@ -3747,17 +3748,35 @@
     let gridHistory = [];    // undo steps for the open note
     let gridRedo = [];       // undone steps that Ctrl+Y can redo
 
-    // All cell polygons for a grid type, in coordinates 0..1 (the canvas is square)
-    function buildGrid(type) {
-        if (gridCache[type]) return gridCache[type];
-        const cells = [];
-        const add = (id, pts) => {
-            let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
-            pts.forEach(([x, y]) => { x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y); });
-            if (x1 <= 0 || y1 <= 0 || x0 >= 1 || y0 >= 1) return;
-            cells.push({ id, pts, x0, y0, x1, y1 });
-        };
-        const A = GRID_CELL_AREA;
+    // Cell size: L = the original size, M = half, S = a quarter (side length)
+    const GRID_SIZES = { L: 1, M: 0.5, S: 0.25 };
+    // Turning a grid by this many degrees gives the same grid again
+    const GRID_PERIOD = { square: 90, octagon: 90, triangle: 180, hexagon: 180 };
+
+    function gridSettings(note) {
+        const type = currentGridType(note);
+        const size = GRID_SIZES[note && note.gridSize] ? note.gridSize : 'L';
+        const rot = ((((note && +note.gridRotation) || 0) % GRID_PERIOD[type]) + GRID_PERIOD[type]) % GRID_PERIOD[type];
+        return { type, size, rot };
+    }
+    // Where the filled cells are stored: the original L / 0° grids keep their old key
+    function gridKey(note) {
+        const { type, size, rot } = gridSettings(note);
+        return size === 'L' && rot === 0 ? type : `${type}@${size}@${rot}`;
+    }
+    const gridOf = (note) => { const g = gridSettings(note); return buildGrid(g.type, g.size, g.rot); };
+
+    // All cell polygons for a grid, in coordinates 0..1 (the canvas is square)
+    function buildGrid(type, size = 'L', rot = 0) {
+        const cacheKey = `${type}@${size}@${rot}`;
+        if (gridCache[cacheKey]) return gridCache[cacheKey];
+        const raw = [];
+        const add = (id, pts) => raw.push({ id, pts });
+        // A turned grid must also cover the corners: build it on a larger area around the canvas
+        const lo = rot ? 0.5 - Math.SQRT1_2 - 0.02 : 0;
+        const span = rot ? 2 * (Math.SQRT1_2 + 0.02) : 1;
+        const k = GRID_SIZES[size] || 1;
+        const A = GRID_CELL_AREA * k * k / (span * span); // cell area on the 0..1 building area
 
         if (type === 'square') {
             const s = Math.sqrt(A);
@@ -3790,8 +3809,8 @@
                 const cx = c * w + (r % 2 ? w / 2 : 0);
                 const cy = r * step;
                 const pts = [];
-                for (let k = 0; k < 6; k++) {
-                    const t = (Math.PI / 180) * (60 * k - 90);
+                for (let q = 0; q < 6; q++) {
+                    const t = (Math.PI / 180) * (60 * q - 90);
                     pts.push([cx + R * Math.cos(t), cy + R * Math.sin(t)]);
                 }
                 add(`${c}.${r}`, pts);
@@ -3813,8 +3832,27 @@
             }
         }
 
+        // place on the canvas (scale + turn around the middle) and keep the cells that are visible
+        const cos = Math.cos(rot * Math.PI / 180), sin = Math.sin(rot * Math.PI / 180);
+        const cells = [];
+        raw.forEach(({ id, pts }) => {
+            let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+            const out = pts.map(([px, py]) => {
+                let x = lo + px * span, y = lo + py * span;
+                if (rot) {
+                    const dx = x - 0.5, dy = y - 0.5;
+                    x = 0.5 + dx * cos - dy * sin;
+                    y = 0.5 + dx * sin + dy * cos;
+                }
+                x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+                return [x, y];
+            });
+            if (x1 <= 0 || y1 <= 0 || x0 >= 1 || y0 >= 1) return;
+            cells.push({ id, pts: out, x0, y0, x1, y1 });
+        });
+
         // bucket index for fast "which cell is under the pen?"
-        const B = 40;
+        const B = Math.round(40 / k);
         const buckets = Array.from({ length: B * B }, () => []);
         const clampB = (v) => Math.min(B - 1, Math.max(0, Math.floor(v * B)));
         cells.forEach((c) => {
@@ -3823,8 +3861,9 @@
             }
         });
         const byId = new Map(cells.map((c) => [c.id, c]));
-        gridCache[type] = { cells, buckets, B, clampB, byId };
-        return gridCache[type];
+        const cellSide = Math.sqrt(GRID_CELL_AREA) * k;
+        gridCache[cacheKey] = { cells, buckets, B, clampB, byId, cellSide };
+        return gridCache[cacheKey];
     }
 
     function pointInPoly(x, y, pts) {
@@ -3850,7 +3889,7 @@
     }
 
     function gridCellsOf(note) {
-        const type = currentGridType(note);
+        const type = gridKey(note);
         if (!note.grids || typeof note.grids !== 'object') note.grids = {};
         if (!note.grids[type] || typeof note.grids[type] !== 'object') note.grids[type] = {};
         return note.grids[type];
@@ -3878,7 +3917,7 @@
         gctx.fillStyle = bg;
         gctx.fillRect(0, 0, W, H);
         if (!note) return;
-        const grid = buildGrid(currentGridType(note));
+        const grid = gridOf(note);
         const cells = gridCellsOf(note);
         grid.cells.forEach((c) => {
             const color = cells[c.id];
@@ -3888,11 +3927,14 @@
             gctx.fillStyle = color;
             gctx.fill();
         });
-        gctx.beginPath();
-        grid.cells.forEach(tracePoly);
         gctx.strokeStyle = gridLineColor(bg);
         gctx.lineWidth = Math.max(1, W / 1600);
-        gctx.stroke();
+        // draw the lines in small batches: one huge path is very slow for the small (S) grids
+        for (let i = 0; i < grid.cells.length; i += 100) {
+            gctx.beginPath();
+            for (let j = i; j < Math.min(i + 100, grid.cells.length); j++) tracePoly(grid.cells[j]);
+            gctx.stroke();
+        }
     }
 
     function paintGridCell(c, color, bg) {
@@ -3923,7 +3965,7 @@
     }
 
     function gridPaintAt(note, pos) {
-        const grid = buildGrid(currentGridType(note));
+        const grid = gridOf(note);
         const c = gridHit(grid, pos.x, pos.y);
         if (!c) return;
         const cells = gridCellsOf(note);
@@ -3942,7 +3984,7 @@
         e.preventDefault();
         try { gridCanvas.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
         const pos = gridPos(e);
-        gridStroke = { changes: new Map(), last: pos, type: currentGridType(note) };
+        gridStroke = { changes: new Map(), last: pos, type: gridKey(note) };
         gridPaintAt(note, pos);
     });
 
@@ -3954,7 +3996,7 @@
         const pos = gridPos(e);
         const { last } = gridStroke;
         const dist = Math.hypot(pos.x - last.x, pos.y - last.y);
-        const steps = Math.max(1, Math.ceil(dist / (Math.sqrt(GRID_CELL_AREA) * 0.25)));
+        const steps = Math.max(1, Math.ceil(dist / (gridOf(note).cellSide * 0.25)));
         for (let i = 1; i <= steps; i++) {
             gridPaintAt(note, { x: last.x + (pos.x - last.x) * (i / steps), y: last.y + (pos.y - last.y) * (i / steps) });
         }
@@ -4014,6 +4056,37 @@
         note.gridType = $('gridType').value;
         gridHistory = [];
         gridRedo = [];
+        updateGridControls(note);
+        touch(note);
+        renderGrid();
+    });
+
+    function updateGridControls(note) {
+        const g = gridSettings(note);
+        $('gridSize').value = g.size;
+        $('gridRotate').textContent = `⟳ ${g.rot}°`;
+        $('gridRotate').title = `Turn the grid 45° (now ${g.rot}°)`;
+    }
+
+    $('gridSize').addEventListener('change', () => {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        note.gridSize = $('gridSize').value;
+        gridHistory = [];
+        gridRedo = [];
+        updateGridControls(note);
+        touch(note);
+        renderGrid();
+    });
+
+    $('gridRotate').addEventListener('click', () => {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        const g = gridSettings(note);
+        note.gridRotation = (g.rot + 45) % GRID_PERIOD[g.type];
+        gridHistory = [];
+        gridRedo = [];
+        updateGridControls(note);
         touch(note);
         renderGrid();
     });
@@ -4045,7 +4118,7 @@
         const note = noteById(state.currentNoteId);
         if (!note || !Object.keys(gridCellsOf(note)).length) return;
         if (!(await askConfirm('Clear grid', 'Clear all filled cells of this grid?', 'Clear'))) return;
-        note.grids[currentGridType(note)] = {};
+        note.grids[gridKey(note)] = {};
         gridHistory = [];
         gridRedo = [];
         touch(note);

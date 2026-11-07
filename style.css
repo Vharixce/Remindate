@@ -1704,3 +1704,7 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .sync-choice-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .sync-choice-text small { color: var(--text-dim); font-size: 11px; line-height: 1.4; }
 .sync-choice-state { font-size: 11px; color: var(--text-dim); white-space: nowrap; flex-shrink: 0; }
+
+/* grid size + turn */
+.grid-size { width: auto; min-width: 52px; }
+.tool-btn.grid-rotate { width: auto; padding: 0 8px; white-space: nowrap; }
