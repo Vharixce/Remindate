@@ -3211,7 +3211,7 @@
 
     // Two fingers = zoom/move, one finger = draw. `content` (the canvas) is
     // scaled with a CSS transform inside `viewport`.
-    function createZoom(viewport, content, onPinchStart) {
+    function createZoom(viewport, content, onPinchStart, onChange) {
         const z = { scale: 1, tx: 0, ty: 0 };
         const MAX = 8;
         const touches = new Map();
@@ -3228,6 +3228,7 @@
             z.ty = Math.min(0, Math.max(h - h * z.scale, z.ty));
             content.style.transform = z.scale === 1 ? '' : `translate(${z.tx}px, ${z.ty}px) scale(${z.scale})`;
             if (resetBtn) resetBtn.hidden = z.scale === 1;
+            if (onChange) onChange(z);
         }
 
         function local(e) {
@@ -3752,11 +3753,13 @@
     const GRID_SIZES = { L: 1, M: 0.5, S: 0.25 };
     // Turning a grid by this many degrees gives the same grid again
     const GRID_PERIOD = { square: 90, octagon: 90, triangle: 180, hexagon: 180 };
+    const GRID_STEP = { square: 45, octagon: 45, triangle: 90, hexagon: 90 };
 
     function gridSettings(note) {
         const type = currentGridType(note);
         const size = GRID_SIZES[note && note.gridSize] ? note.gridSize : 'L';
-        const rot = ((((note && +note.gridRotation) || 0) % GRID_PERIOD[type]) + GRID_PERIOD[type]) % GRID_PERIOD[type];
+        let rot = ((((note && +note.gridRotation) || 0) % GRID_PERIOD[type]) + GRID_PERIOD[type]) % GRID_PERIOD[type];
+        rot -= rot % GRID_STEP[type]; // triangles and hexagons only turn in steps of 90°
         return { type, size, rot };
     }
     // Where the filled cells are stored: the original L / 0° grids keep their old key
@@ -3902,49 +3905,112 @@
         return lum > 0.55 ? 'rgba(0,0,0,0.22)' : 'rgba(255,255,255,0.16)';
     }
 
-    function tracePoly(c) {
-        const W = gridCanvas.width, H = gridCanvas.height;
-        gctx.moveTo(c.pts[0][0] * W, c.pts[0][1] * H);
-        for (let i = 1; i < c.pts.length; i++) gctx.lineTo(c.pts[i][0] * W, c.pts[i][1] * H);
-        gctx.closePath();
+    // A drawing target: canvas context + how 0..1 grid coordinates map to its pixels
+    const mainGridView = () => ({ g: gctx, sx: gridCanvas.width, sy: gridCanvas.height, ox: 0, oy: 0 });
+
+    function tracePoly(c, v) {
+        const { g, sx, sy, ox, oy } = v;
+        g.moveTo(ox + c.pts[0][0] * sx, oy + c.pts[0][1] * sy);
+        for (let i = 1; i < c.pts.length; i++) g.lineTo(ox + c.pts[i][0] * sx, oy + c.pts[i][1] * sy);
+        g.closePath();
+    }
+
+    function drawGridOn(v, note, bg) {
+        const { g } = v;
+        g.setTransform(1, 0, 0, 1, 0, 0);
+        g.fillStyle = bg;
+        g.fillRect(0, 0, g.canvas.width, g.canvas.height);
+        if (!note) return;
+        const grid = gridOf(note);
+        const cells = gridCellsOf(note);
+        // only the cells that are visible on this target
+        const x0 = -v.ox / v.sx, y0 = -v.oy / v.sy;
+        const x1 = (g.canvas.width - v.ox) / v.sx, y1 = (g.canvas.height - v.oy) / v.sy;
+        const list = (v.ox || v.oy || x1 < 1 || y1 < 1)
+            ? grid.cells.filter((c) => c.x1 >= x0 && c.x0 <= x1 && c.y1 >= y0 && c.y0 <= y1)
+            : grid.cells;
+        list.forEach((c) => {
+            const color = cells[c.id];
+            if (!color) return;
+            g.beginPath();
+            tracePoly(c, v);
+            g.fillStyle = color;
+            g.fill();
+        });
+        g.strokeStyle = gridLineColor(bg);
+        g.lineWidth = Math.max(1, v.sx / 1600);
+        // draw the lines in small batches: one huge path is very slow for the small (S) grids
+        for (let i = 0; i < list.length; i += 100) {
+            g.beginPath();
+            for (let j = i; j < Math.min(i + 100, list.length); j++) tracePoly(list[j], v);
+            g.stroke();
+        }
     }
 
     function renderGrid() {
         const note = noteById(state.currentNoteId);
         const bg = (note && note.canvasBackground) || DEFAULT_CANVAS_BG;
-        const W = gridCanvas.width, H = gridCanvas.height;
-        gctx.setTransform(1, 0, 0, 1, 0, 0);
-        gctx.fillStyle = bg;
-        gctx.fillRect(0, 0, W, H);
-        if (!note) return;
-        const grid = gridOf(note);
-        const cells = gridCellsOf(note);
-        grid.cells.forEach((c) => {
-            const color = cells[c.id];
-            if (!color) return;
-            gctx.beginPath();
-            tracePoly(c);
-            gctx.fillStyle = color;
-            gctx.fill();
-        });
-        gctx.strokeStyle = gridLineColor(bg);
-        gctx.lineWidth = Math.max(1, W / 1600);
-        // draw the lines in small batches: one huge path is very slow for the small (S) grids
-        for (let i = 0; i < grid.cells.length; i += 100) {
-            gctx.beginPath();
-            for (let j = i; j < Math.min(i + 100, grid.cells.length); j++) tracePoly(grid.cells[j]);
-            gctx.stroke();
-        }
+        drawGridOn(mainGridView(), note, bg);
+        renderGridDetail();
     }
 
     function paintGridCell(c, color, bg) {
-        gctx.beginPath();
-        tracePoly(c);
-        gctx.fillStyle = color || bg;
-        gctx.fill();
-        gctx.strokeStyle = gridLineColor(bg);
-        gctx.lineWidth = Math.max(1, gridCanvas.width / 1600);
-        gctx.stroke();
+        const views = [mainGridView()];
+        if (gridDetailView) views.push(gridDetailView);
+        views.forEach((v) => {
+            v.g.beginPath();
+            tracePoly(c, v);
+            v.g.fillStyle = color || bg;
+            v.g.fill();
+            v.g.strokeStyle = gridLineColor(bg);
+            v.g.lineWidth = Math.max(1, v.sx / 1600);
+            v.g.stroke();
+        });
+    }
+
+    /* Sharp zoom: when zoomed in, an extra canvas on top shows only the visible part,
+     * drawn at the screen's full resolution (the big canvas underneath only gets stretched). */
+    const gridDetail = document.createElement('canvas');
+    gridDetail.className = 'grid-detail';
+    gridDetail.hidden = true;
+    gridContainer.appendChild(gridDetail);
+    const gridDetailCtx = gridDetail.getContext('2d');
+    let gridDetailView = null;
+    let gridDetailTimer = null;
+    let gridZoomState = { scale: 1, tx: 0, ty: 0 };
+
+    function onGridZoom(z) {
+        gridZoomState = { scale: z.scale, tx: z.tx, ty: z.ty };
+        // while zooming/moving show the stretched picture, sharpen it as soon as you stop
+        gridDetail.hidden = true;
+        gridDetailView = null;
+        clearTimeout(gridDetailTimer);
+        if (z.scale > 1) gridDetailTimer = setTimeout(renderGridDetail, 120);
+    }
+
+    function renderGridDetail() {
+        const { scale, tx, ty } = gridZoomState;
+        if (scale <= 1 || gridContainer.style.display === 'none') {
+            gridDetail.hidden = true;
+            gridDetailView = null;
+            return;
+        }
+        const note = noteById(state.currentNoteId);
+        const dpr = Math.min(3, window.devicePixelRatio || 1);
+        const w = gridContainer.clientWidth, h = gridCanvas.offsetHeight;
+        gridDetail.style.width = `${w}px`;
+        gridDetail.style.height = `${h}px`;
+        gridDetail.width = Math.round(w * dpr);
+        gridDetail.height = Math.round(h * dpr);
+        gridDetailView = {
+            g: gridDetailCtx,
+            sx: gridCanvas.offsetWidth * scale * dpr,
+            sy: gridCanvas.offsetHeight * scale * dpr,
+            ox: tx * dpr,
+            oy: ty * dpr
+        };
+        drawGridOn(gridDetailView, note, (note && note.canvasBackground) || DEFAULT_CANVAS_BG);
+        gridDetail.hidden = false;
     }
 
     function fitGrid() {
@@ -4036,7 +4102,7 @@
     gridCanvas.addEventListener('pointerup', endGridStroke);
     gridCanvas.addEventListener('pointercancel', endGridStroke);
 
-    const gridZoom = createZoom(gridContainer, gridCanvas, cancelGridStroke);
+    const gridZoom = createZoom(gridContainer, gridCanvas, cancelGridStroke, onGridZoom);
 
     function setGridTool(tool) {
         gridTool = tool;
@@ -4065,7 +4131,7 @@
         const g = gridSettings(note);
         $('gridSize').value = g.size;
         $('gridRotate').textContent = `⟳ ${g.rot}°`;
-        $('gridRotate').title = `Turn the grid 45° (now ${g.rot}°)`;
+        $('gridRotate').title = `Turn the grid ${GRID_STEP[g.type]}° (now ${g.rot}°)`;
     }
 
     $('gridSize').addEventListener('change', () => {
@@ -4083,7 +4149,7 @@
         const note = noteById(state.currentNoteId);
         if (!note) return;
         const g = gridSettings(note);
-        note.gridRotation = (g.rot + 45) % GRID_PERIOD[g.type];
+        note.gridRotation = (g.rot + GRID_STEP[g.type]) % GRID_PERIOD[g.type];
         gridHistory = [];
         gridRedo = [];
         updateGridControls(note);

@@ -1708,3 +1708,7 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 /* grid size + turn */
 .grid-size { width: auto; min-width: 52px; }
 .tool-btn.grid-rotate { width: auto; padding: 0 8px; white-space: nowrap; }
+
+/* sharp zoomed-in grid (drawn on top, clicks go to the grid underneath) */
+.grid-detail { position: absolute; left: 0; top: 0; pointer-events: none; z-index: 1; }
+.grid-detail[hidden] { display: none; }
