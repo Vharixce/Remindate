@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * Remindate Sync Server — keeps your notes.json on your own (paid) server.
+ * Remindate Sync Server — keeps your remindate.json on your own (paid) server.
  * No packages needed: only Node.js 18 or newer.
  *
  *   SYNC_TOKEN=<a long secret> node scripts/remindate-sync-server.js
@@ -8,13 +8,13 @@
  * Settings (environment variables):
  *   SYNC_TOKEN    required. The same token you type in Remindate > Sync Settings > Server Sync.
  *   PORT          port to listen on (default 8787; hosts like Railway/Render set this for you).
- *   DATA_DIR      folder where notes.json is stored (default ./data). Use a persistent disk/volume.
+ *   DATA_DIR      folder where remindate.json is stored (default ./data). Use a persistent disk/volume.
  *   ALLOW_ORIGIN  which website may sync (default * = any). Example: https://vharixce.github.io
  *
- * In Remindate use the address  https://<your-server>/notes.json
+ * In Remindate use the address  https://<your-server>/remindate.json
  *
- * API:  GET /notes.json  -> the file (+ ETag), 404 when nothing stored yet
- *       PUT /notes.json  -> saves the JSON body; send "If-Match: <ETag>" to avoid overwriting
+ * API:  GET /remindate.json  -> the file (+ ETag), 404 when nothing stored yet
+ *       PUT /remindate.json  -> saves the JSON body; send "If-Match: <ETag>" to avoid overwriting
  *                           someone else's newer save (answers 412 then)
  *       GET /health      -> "ok"
  */
@@ -28,7 +28,7 @@ const TOKEN = process.env.SYNC_TOKEN || '';
 const PORT = Number(process.env.PORT) || 8787;
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(process.cwd(), 'data'));
 const ALLOW_ORIGIN = process.env.ALLOW_ORIGIN || '*';
-const FILE = path.join(DATA_DIR, 'notes.json');
+const FILE = path.join(DATA_DIR, 'remindate.json');
 const MAX_BYTES = 50 * 1024 * 1024; // drawings and voice notes can make the file big
 
 if (TOKEN.length < 16) {
@@ -37,6 +37,9 @@ if (TOKEN.length < 16) {
     process.exit(1);
 }
 fs.mkdirSync(DATA_DIR, { recursive: true });
+// older versions stored the file as notes.json
+const OLD_FILE = path.join(DATA_DIR, 'notes.json');
+if (!fs.existsSync(FILE) && fs.existsSync(OLD_FILE)) fs.renameSync(OLD_FILE, FILE);
 
 const etagOf = (buf) => `"${crypto.createHash('sha256').update(buf).digest('hex').slice(0, 32)}"`;
 const readFile = () => { try { return fs.readFileSync(FILE); } catch { return null; } };
@@ -60,7 +63,8 @@ const server = http.createServer((req, res) => {
 
     const url = new URL(req.url, 'http://x');
     if (url.pathname === '/health') return send(res, 200, '"ok"');
-    if (url.pathname !== '/notes.json') return send(res, 404, { error: 'use /notes.json' });
+    // /notes.json is the old address and still works
+    if (url.pathname !== '/remindate.json' && url.pathname !== '/notes.json') return send(res, 404, { error: 'use /remindate.json' });
     if (!tokenOk(req)) return send(res, 401, { error: 'wrong or missing token' });
 
     if (req.method === 'GET') {
@@ -85,7 +89,7 @@ const server = http.createServer((req, res) => {
             if (ifMatch && current && ifMatch !== etagOf(current)) {
                 return send(res, 412, { error: 'someone else saved first' }, { ETag: etagOf(current) });
             }
-            // write to a temp file first so a crash never leaves a half-written notes.json
+            // write to a temp file first so a crash never leaves a half-written remindate.json
             const tmp = `${FILE}.${process.pid}.tmp`;
             fs.writeFileSync(tmp, body);
             if (current) fs.copyFileSync(FILE, path.join(DATA_DIR, 'notes.backup.json'));

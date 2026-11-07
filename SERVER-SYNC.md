@@ -1,6 +1,6 @@
 # Server Sync (your own server)
 
-Remindate can keep `notes.json` on your own server instead of (or next to) GitHub.
+Remindate can keep `remindate.json` on your own server instead of (or next to) GitHub.
 The server is one small file, `scripts/remindate-sync-server.js`, that only needs Node.js 18+ (no packages).
 
 ## 1. Pick a host
@@ -25,7 +25,7 @@ Check it works: open `https://<your-server>/health` → it shows `"ok"`.
 ## 3. Connect Remindate
 Explorer → **Sync Settings** → **Server Sync**:
 
-- Server address: `https://<your-server>/notes.json`
+- Server address: `https://<your-server>/remindate.json`
 - Access token: your `SYNC_TOKEN`
 - Tick *Sync automatically after changes*, press **Test connection**, then **Save**.
 

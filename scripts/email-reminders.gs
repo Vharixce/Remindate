@@ -1,7 +1,7 @@
 /**
  * Remindate – email reminders (Google Apps Script)
  *
- * Every minute this script reads notes.json from your private GitHub data repo,
+ * Every minute this script reads remindate.json from your private GitHub data repo,
  * finds notes with "Send Email Notification" on whose time (or repeat) has come,
  * and emails them from your Gmail. What was sent is remembered, so nothing is sent twice.
  *
@@ -14,7 +14,7 @@
 
 var CONFIG = {
   dataRepo: 'Vharixce/Remindate-DATA-PRIVATE',
-  dataPath: 'notes.json',
+  dataPath: 'remindate.json',
   appUrl: 'https://vharixce.github.io/Remindate/',
   lookbackMinutes: 30,   // also send reminders up to 30 min late (e.g. after a Google hiccup)
   keepSentDays: 21
@@ -91,18 +91,24 @@ function checkReminders() {
 function loadNotes_() {
   var token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
   if (!token) throw new Error('Add the script property GITHUB_TOKEN first (Project Settings → Script properties).');
-  var url = 'https://api.github.com/repos/' + CONFIG.dataRepo + '/contents/' +
-    CONFIG.dataPath.split('/').map(encodeURIComponent).join('/');
-  var res = UrlFetchApp.fetch(url, {
-    headers: {
-      Authorization: 'Bearer ' + token.trim(),
-      Accept: 'application/vnd.github.raw+json',
-      'X-GitHub-Api-Version': '2022-11-28'
-    },
-    muteHttpExceptions: true
-  });
-  var code = res.getResponseCode();
-  if (code === 404) throw new Error('notes.json not found in ' + CONFIG.dataRepo + ' (is GitHub Sync on in Remindate?), or the token has no access to that repo.');
+  // remindate.json is the data file; notes.json is its old name (used until the app has switched over)
+  var paths = [CONFIG.dataPath, 'remindate.json', 'notes.json'].filter(function (p, i, a) { return a.indexOf(p) === i; });
+  var res, code;
+  for (var i = 0; i < paths.length; i++) {
+    var url = 'https://api.github.com/repos/' + CONFIG.dataRepo + '/contents/' +
+      paths[i].split('/').map(encodeURIComponent).join('/');
+    res = UrlFetchApp.fetch(url, {
+      headers: {
+        Authorization: 'Bearer ' + token.trim(),
+        Accept: 'application/vnd.github.raw+json',
+        'X-GitHub-Api-Version': '2022-11-28'
+      },
+      muteHttpExceptions: true
+    });
+    code = res.getResponseCode();
+    if (code !== 404) break;
+  }
+  if (code === 404) throw new Error('remindate.json not found in ' + CONFIG.dataRepo + ' (is GitHub Sync on in Remindate?), or the token has no access to that repo.');
   if (code === 401 || code === 403) throw new Error('GitHub refused the token (' + code + '). Check GITHUB_TOKEN and that it can read ' + CONFIG.dataRepo + '.');
   if (code !== 200) throw new Error('GitHub error ' + code);
   var text = res.getContentText('UTF-8');

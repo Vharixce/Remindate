@@ -924,6 +924,8 @@
         selectImage(null);
         textDirty = false;
         gridHistory = [];
+        gridRedo = [];
+        drawRedo = [];
 
         if (empty) {
             $('noteTitle').value = '';
@@ -943,15 +945,22 @@
         $('noteFolder').innerHTML = folderOptions(note.folderId);
         updateScheduleUi(note);
 
-        state.draw.strokes = note.strokes.map((s) => ({
-            color: s.color,
-            thicknessRatio: s.thicknessRatio,
-            points: (s.points || []).map((p) => ({ x: p.x, y: p.y }))
-        }));
+        drawSel = null;
+        state.draw.strokes = note.strokes.map(copyStroke);
 
         setMode(state.prefs.mode);
         fitCanvas();
         renderStrokes();
+    }
+
+    // A drawing item is a pen line, or a picture ({ image, x, y, w, h } as parts of the canvas size)
+    function copyStroke(s) {
+        if (s.image) return { image: s.image, x: s.x, y: s.y, w: s.w, h: s.h, points: [] };
+        return {
+            color: s.color,
+            thicknessRatio: s.thicknessRatio,
+            points: (s.points || []).map((p) => ({ x: p.x, y: p.y }))
+        };
     }
 
     let editorTimer = null;
@@ -972,11 +981,7 @@
             content = htmlToText(html);
         }
         const folderId = $('noteFolder').value || null;
-        const strokes = state.draw.strokes.map((s) => ({
-            color: s.color,
-            thicknessRatio: s.thicknessRatio,
-            points: s.points.map((p) => ({ x: p.x, y: p.y }))
-        }));
+        const strokes = state.draw.strokes.map(copyStroke);
         textDirty = false;
         const changed = note.title !== title || note.html !== html || note.folderId !== folderId ||
             JSON.stringify(note.strokes) !== JSON.stringify(strokes);
@@ -2376,7 +2381,7 @@
         if (code && githubConfigured()) {
             code = code
                 .replace(/dataRepo: '[^']*'/, `dataRepo: '${githubConfig.owner}/${githubConfig.repo}'`)
-                .replace(/dataPath: '[^']*'/, `dataPath: '${githubConfig.path || 'notes.json'}'`)
+                .replace(/dataPath: '[^']*'/, `dataPath: '${githubConfig.path || 'remindate.json'}'`)
                 .replace(/appUrl: '[^']*'/, `appUrl: '${location.protocol.startsWith('http') ? location.href.split(/[?#]/)[0] : 'https://vharixce.github.io/Remindate/'}'`);
         }
         return code;
@@ -2384,7 +2389,7 @@
 
     async function openEmailHelp() {
         $('emailHelpRepo').innerHTML = githubConfigured()
-            ? `✔ GitHub Sync is set up: <code>${escapeHtml(githubConfig.owner)}/${escapeHtml(githubConfig.repo)}/${escapeHtml(githubConfig.path || 'notes.json')}</code>. The code you copy below already uses this repo.`
+            ? `✔ GitHub Sync is set up: <code>${escapeHtml(githubConfig.owner)}/${escapeHtml(githubConfig.repo)}/${escapeHtml(githubConfig.path || 'remindate.json')}</code>. The code you copy below already uses this repo.`
             : '⚠ GitHub Sync is not set up on this device yet. Do that first, then come back here, so the copied code uses your repo.';
         $('emailHelpCopyStatus').textContent = '';
         $('emailHelpCode').hidden = true;
@@ -3351,9 +3356,17 @@
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.restore();
         state.draw.strokes.forEach(drawStroke);
+        drawSelectionFrame();
     }
 
     function drawStroke(stroke) {
+        if (stroke.image) {
+            const img = drawImageEl(stroke.image);
+            if (img.complete && img.naturalWidth) {
+                ctx.drawImage(img, stroke.x * canvas.width, stroke.y * canvas.height, stroke.w * canvas.width, stroke.h * canvas.height);
+            }
+            return;
+        }
         if (!stroke.points.length) return;
         ctx.strokeStyle = stroke.color || '#000000';
         ctx.lineWidth = Math.max(1, (stroke.thicknessRatio || 0.006) * canvas.width);
@@ -3372,19 +3385,189 @@
         ctx.stroke();
     }
 
-    function pointerPos(e) {
+    function pointerPos(e, unclamped) {
         const rect = canvas.getBoundingClientRect();
-        return {
-            x: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
-            y: Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height))
-        };
+        const x = (e.clientX - rect.left) / rect.width;
+        const y = (e.clientY - rect.top) / rect.height;
+        if (unclamped) return { x, y };
+        return { x: Math.min(1, Math.max(0, x)), y: Math.min(1, Math.max(0, y)) };
     }
+
+    /* ---------------- pictures in the drawing ---------------- */
+    const drawImageCache = new Map();
+    let drawSel = null;      // the picture that is being placed (move / resize)
+    let drawSelDrag = null;
+
+    function drawImageEl(src) {
+        let img = drawImageCache.get(src);
+        if (!img) {
+            img = new Image();
+            img.onload = () => renderStrokes();
+            img.src = src;
+            drawImageCache.set(src, img);
+        }
+        return img;
+    }
+
+    // size of the corner handle, as part of the canvas width / height
+    const handleSize = () => ({ x: 18 / (canvas.clientWidth || 1), y: 18 / (canvas.clientHeight || 1) });
+
+    function drawSelectionFrame() {
+        if (!drawSel || !state.draw.strokes.includes(drawSel)) { drawSel = null; return; }
+        const W = canvas.width, H = canvas.height;
+        const px = W / (canvas.clientWidth || W);
+        const x = drawSel.x * W, y = drawSel.y * H, w = drawSel.w * W, h = drawSel.h * H;
+        ctx.save();
+        ctx.lineWidth = 2 * px;
+        ctx.setLineDash([6 * px, 4 * px]);
+        ctx.strokeStyle = '#7c6ff0';
+        ctx.strokeRect(x, y, w, h);
+        ctx.setLineDash([]);
+        const hs = handleSize();
+        ctx.fillStyle = '#7c6ff0';
+        ctx.fillRect(x + w - hs.x * W / 2, y + h - hs.y * H / 2, hs.x * W, hs.y * H);
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(x + w - hs.x * W / 4, y + h - hs.y * H / 4, hs.x * W / 2, hs.y * H / 2);
+        ctx.restore();
+    }
+
+    function selectionHit(pos) {
+        if (!drawSel) return null;
+        const hs = handleSize();
+        const cx = drawSel.x + drawSel.w, cy = drawSel.y + drawSel.h;
+        if (Math.abs(pos.x - cx) <= hs.x * 0.9 && Math.abs(pos.y - cy) <= hs.y * 0.9) return 'resize';
+        if (pos.x >= drawSel.x && pos.x <= cx && pos.y >= drawSel.y && pos.y <= cy) return 'move';
+        return null;
+    }
+
+    function dragSelection(e) {
+        e.preventDefault();
+        const pos = pointerPos(e, true);
+        const { mode, start, orig } = drawSelDrag;
+        const dx = pos.x - start.x, dy = pos.y - start.y;
+        if (mode === 'move') {
+            // keep at least a bit of the picture on the canvas
+            drawSel.x = Math.min(0.95, Math.max(0.05 - orig.w, orig.x + dx));
+            drawSel.y = Math.min(0.95, Math.max(0.05 - orig.h, orig.y + dy));
+        } else {
+            // resize from the corner, keeping the picture's shape
+            const ratio = orig.h / orig.w;
+            const grow = Math.max(dx, dy / ratio);
+            drawSel.w = Math.max(0.04, orig.w + grow);
+            drawSel.h = drawSel.w * ratio;
+        }
+        renderStrokes();
+    }
+
+    // the top-most picture under a point
+    function pictureAt(pos) {
+        for (let i = state.draw.strokes.length - 1; i >= 0; i--) {
+            const s = state.draw.strokes[i];
+            if (s.image && pos.x >= s.x && pos.x <= s.x + s.w && pos.y >= s.y && pos.y <= s.y + s.h) return s;
+        }
+        return null;
+    }
+
+    async function addDrawImages(files, at) {
+        const note = noteById(state.currentNoteId);
+        if (!note || !files.length) return;
+        let added = null;
+        for (const [i, file] of files.entries()) {
+            let src;
+            try { src = await imageFileToDataUrl(file); } catch (err) { toast('Could not read that picture'); continue; }
+            const img = drawImageEl(src);
+            if (!img.complete || !img.naturalWidth) {
+                await new Promise((resolve) => { img.addEventListener('load', resolve, { once: true }); img.addEventListener('error', resolve, { once: true }); });
+            }
+            if (!img.naturalWidth) { toast('Could not read that picture'); continue; }
+            const W = canvas.clientWidth || canvas.width, H = canvas.clientHeight || canvas.height;
+            // at most 60% of the width and 80% of the height, never bigger than the picture itself
+            let w = Math.min(0.6, img.naturalWidth / W);
+            let h = w * W * (img.naturalHeight / img.naturalWidth) / H;
+            if (h > 0.8) { w *= 0.8 / h; h = 0.8; }
+            const cx = at ? at.x : 0.5, cy = at ? at.y : 0.5;
+            const item = {
+                image: src,
+                x: Math.min(1 - w, Math.max(0, cx - w / 2)) + i * 0.03,
+                y: Math.min(1 - h, Math.max(0, cy - h / 2)) + i * 0.03,
+                w, h, points: []
+            };
+            state.draw.strokes.push(item);
+            added = item;
+        }
+        if (!added) return;
+        drawRedo = [];
+        drawSel = added;
+        renderStrokes();
+        flushEditor();
+        toast('Picture added: drag it to move, drag the corner to resize, click outside when done');
+    }
+
+    function deleteSelectedPicture() {
+        if (!drawSel) return false;
+        state.draw.strokes = state.draw.strokes.filter((s) => s !== drawSel);
+        drawSel = null;
+        drawRedo = [];
+        renderStrokes();
+        flushEditor();
+        return true;
+    }
+
+    // Double-click a picture to move / resize / delete it again
+    canvas.addEventListener('dblclick', (e) => {
+        if (state.prefs.mode !== 'draw') return;
+        const pic = pictureAt(pointerPos(e, true));
+        if (!pic) return;
+        // the double-click also drew a dot: take that away again
+        const last = state.draw.strokes[state.draw.strokes.length - 1];
+        if (last && !last.image && last.points.length <= 2) state.draw.strokes.pop();
+        drawSel = pic;
+        renderStrokes();
+        flushEditor();
+    });
+
+    // Ctrl+V a picture while the drawing is open
+    document.addEventListener('paste', (e) => {
+        if (state.prefs.mode !== 'draw' || state.prefs.activeTab === 'calendar' || !state.currentNoteId) return;
+        if (document.querySelector('.modal.active')) return;
+        const typing = e.target.closest && e.target.closest('input, textarea, [contenteditable="true"], [contenteditable=""]');
+        if (typing && typing.offsetParent !== null) return;
+        const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => f.type.startsWith('image/'));
+        if (!files.length) return;
+        e.preventDefault();
+        addDrawImages(files);
+    });
+
+    // Drop picture files on the drawing
+    drawContainer.addEventListener('dragover', (e) => {
+        if (Array.from(e.dataTransfer.types || []).includes('Files')) e.preventDefault();
+    });
+    drawContainer.addEventListener('drop', (e) => {
+        const files = [...(e.dataTransfer.files || [])].filter((f) => f.type.startsWith('image/'));
+        if (!files.length) return;
+        e.preventDefault();
+        addDrawImages(files, pointerPos(e));
+    });
 
     function startStroke(e) {
         if (state.prefs.mode !== 'draw' || drawZoom.isPinching()) return;
         e.preventDefault();
         const note = noteById(state.currentNoteId);
         if (!note) return;
+
+        // A selected picture: drag it to move, drag the corner to resize, click elsewhere when done
+        if (drawSel) {
+            const pos = pointerPos(e, true);
+            const hit = selectionHit(pos);
+            if (hit) {
+                try { canvas.setPointerCapture?.(e.pointerId); } catch (err) { /* ignore */ }
+                drawSelDrag = { mode: hit, start: pos, orig: { x: drawSel.x, y: drawSel.y, w: drawSel.w, h: drawSel.h } };
+                return;
+            }
+            drawSel = null;
+            renderStrokes();
+            return;
+        }
 
         if (state.draw.tool === 'fill') {
             note.canvasBackground = state.draw.color;
@@ -3411,11 +3594,17 @@
             points: [pos]
         };
         state.draw.strokes.push(state.draw.current);
+        drawRedo = [];
         state.draw.drawing = true;
         renderStrokes();
     }
 
     function moveStroke(e) {
+        if (drawSelDrag) { dragSelection(e); return; }
+        if (drawSel && !state.draw.drawing) {
+            const hit = selectionHit(pointerPos(e, true));
+            canvas.style.cursor = hit === 'resize' ? 'nwse-resize' : hit === 'move' ? 'move' : '';
+        }
         if (!state.draw.drawing) return;
         e.preventDefault();
         const pos = pointerPos(e);
@@ -3440,6 +3629,7 @@
     }
 
     function endStroke() {
+        if (drawSelDrag) { drawSelDrag = null; flushEditor(); return; }
         if (!state.draw.drawing) return;
         state.draw.drawing = false;
         state.draw.current = null;
@@ -3455,6 +3645,7 @@
             !stroke.points.some((p) => Math.hypot(p.x - pos.x, p.y - pos.y) <= radius)
         );
         if (state.draw.strokes.length !== before) {
+            drawRedo = [];
             renderStrokes();
             flushEditor();
         }
@@ -3474,20 +3665,38 @@
         canvas.style.cursor = tool === 'eraser' ? 'cell' : (tool === 'fill' ? 'copy' : 'crosshair');
     }
 
+    $('toolImage').addEventListener('click', () => $('drawImageFile').click());
+    $('drawImageFile').addEventListener('change', (e) => {
+        const files = [...e.target.files].filter((f) => f.type.startsWith('image/'));
+        e.target.value = '';
+        addDrawImages(files);
+    });
     $('toolPen').addEventListener('click', () => setTool('pen'));
     $('toolEraser').addEventListener('click', () => setTool('eraser'));
     $('toolFill').addEventListener('click', () => setTool('fill'));
 
     $('toolUndo').addEventListener('click', () => {
-        state.draw.strokes.pop();
+        const stroke = state.draw.strokes.pop();
+        if (!stroke) return;
+        drawRedo.push(stroke);
         renderStrokes();
         flushEditor();
     });
+
+    // Redo (Ctrl+Y): put back the stroke that was undone last
+    function redoDraw() {
+        const stroke = drawRedo.pop();
+        if (!stroke) return;
+        state.draw.strokes.push(stroke);
+        renderStrokes();
+        flushEditor();
+    }
 
     $('toolClear').addEventListener('click', async () => {
         if (!state.draw.strokes.length) return;
         if (!(await askConfirm('Clear drawing', 'Clear the entire drawing?', 'Clear'))) return;
         state.draw.strokes = [];
+        drawRedo = [];
         renderStrokes();
         flushEditor();
     });
@@ -3534,7 +3743,9 @@
     const gridCache = {};
     let gridTool = 'pen';
     let gridStroke = null;   // { changes: Map(id -> previous color), last: {x, y} }
+    let drawRedo = [];       // undone drawing strokes that Ctrl+Y can redo
     let gridHistory = [];    // undo steps for the open note
+    let gridRedo = [];       // undone steps that Ctrl+Y can redo
 
     // All cell polygons for a grid type, in coordinates 0..1 (the canvas is square)
     function buildGrid(type) {
@@ -3757,6 +3968,7 @@
         const note = noteById(state.currentNoteId);
         if (!note || !stroke.changes.size) return;
         gridHistory.push(stroke);
+        gridRedo = [];
         if (gridHistory.length > 100) gridHistory.shift();
         touch(note);
         renderTree();
@@ -3764,7 +3976,9 @@
 
     function revertGridChanges(note, stroke) {
         const cells = note.grids[stroke.type] || (note.grids[stroke.type] = {});
+        stroke.after = new Map();   // remember the painted colors so the step can be redone
         stroke.changes.forEach((prev, id) => {
+            stroke.after.set(id, cells[id]);
             if (prev) cells[id] = prev; else delete cells[id];
         });
     }
@@ -3799,6 +4013,7 @@
         if (!note) return;
         note.gridType = $('gridType').value;
         gridHistory = [];
+        gridRedo = [];
         touch(note);
         renderGrid();
     });
@@ -3808,9 +4023,23 @@
         const stroke = gridHistory.pop();
         if (!note || !stroke) return;
         revertGridChanges(note, stroke);
+        gridRedo.push(stroke);
         touch(note);
         renderGrid();
     });
+
+    function redoGrid() {
+        const note = noteById(state.currentNoteId);
+        const stroke = gridRedo.pop();
+        if (!note || !stroke || !stroke.after) return;
+        const cells = note.grids[stroke.type] || (note.grids[stroke.type] = {});
+        stroke.after.forEach((value, id) => {
+            if (value) cells[id] = value; else delete cells[id];
+        });
+        gridHistory.push(stroke);
+        touch(note);
+        renderGrid();
+    }
 
     $('gridClear').addEventListener('click', async () => {
         const note = noteById(state.currentNoteId);
@@ -3818,6 +4047,7 @@
         if (!(await askConfirm('Clear grid', 'Clear all filled cells of this grid?', 'Clear'))) return;
         note.grids[currentGridType(note)] = {};
         gridHistory = [];
+        gridRedo = [];
         touch(note);
         renderGrid();
         renderTree();
@@ -4044,6 +4274,14 @@
     /* ---------------- GitHub-sync ---------------- */
 
     let githubConfig = readJSON(STORAGE.github, {});
+    // The data file used to be called notes.json: switch to remindate.json. The first sync
+    // reads the old file once and saves everything as remindate.json (the old file stays untouched).
+    if (githubConfig.path === 'notes.json') {
+        githubConfig.path = 'remindate.json';
+        githubConfig.legacyPath = 'notes.json';
+        githubConfig.sha = null;
+        writeJSON(STORAGE.github, githubConfig);
+    }
     let githubTimer = null;
     let githubBusy = false;
 
@@ -4080,7 +4318,7 @@
     function showGithubSettings() {
         $('ghOwner').value = githubConfig.owner || '';
         $('ghRepo').value = githubConfig.repo || '';
-        $('ghPath').value = githubConfig.path || 'notes.json';
+        $('ghPath').value = githubConfig.path || 'remindate.json';
         $('ghToken').value = githubConfig.token || '';
         $('ghAutoSync').checked = !!githubConfig.autoSync;
         openModal('githubModal');
@@ -4099,8 +4337,8 @@
         };
     }
 
-    function githubUrl() {
-        return `https://api.github.com/repos/${encodeURIComponent(githubConfig.owner)}/${encodeURIComponent(githubConfig.repo)}/contents/${githubConfig.path.split('/').map(encodeURIComponent).join('/')}`;
+    function githubUrl(path = githubConfig.path) {
+        return `https://api.github.com/repos/${encodeURIComponent(githubConfig.owner)}/${encodeURIComponent(githubConfig.repo)}/contents/${path.split('/').map(encodeURIComponent).join('/')}`;
     }
 
     async function githubRequest(method, body, url = githubUrl(), accept = 'application/vnd.github+json') {
@@ -4169,7 +4407,7 @@
 
     function normalizeSnapshot(data) {
         const notes = Array.isArray(data) ? data : data.notes;
-        if (!Array.isArray(notes)) throw new Error('notes.json on GitHub does not contain a valid note list');
+        if (!Array.isArray(notes)) throw new Error('remindate.json on GitHub does not contain a valid note list');
         const snap = {
             notes: notes.map((n) => { migrateNote(n); return n; }),
             folders: (Array.isArray(data) ? [] : (data.folders || [])).map((f) => { migrateFolder(f); return f; }),
@@ -4252,12 +4490,22 @@
     }
 
     async function fetchRemote() {
-        const meta = await githubRequest('GET');
+        let meta = await githubRequest('GET');
+        let url = githubUrl();
+        let legacy = false;
+        if (!meta && githubConfig.legacyPath) {
+            // remindate.json doesn't exist yet: start from the old notes.json
+            url = githubUrl(githubConfig.legacyPath);
+            meta = await githubRequest('GET', null, url);
+            legacy = true;
+        }
         if (!meta) return null;
         let text;
         if (meta.content && meta.encoding === 'base64') text = decodeGithubFile(meta.content);
-        else text = await githubRequest('GET', null, githubUrl(), 'application/vnd.github.raw+json'); // files > 1 MB
-        return { sha: meta.sha, data: text && text.trim() ? JSON.parse(text) : [] };
+        else text = await githubRequest('GET', null, url, 'application/vnd.github.raw+json'); // files > 1 MB
+        const data = text && text.trim() ? JSON.parse(text) : [];
+        // from the old file: no sha, so the push creates remindate.json, and always push once
+        return legacy ? { sha: null, data, legacy: true } : { sha: meta.sha, data };
     }
 
     async function pushRemote(snap, sha) {
@@ -4279,11 +4527,12 @@
         }
         githubConfig.sha = result.content.sha;
         githubConfig.remoteUpdatedAt = payload.updatedAt;
+        delete githubConfig.legacyPath; // remindate.json exists now
     }
 
     /* ---------------- Server sync (your own server / paid hosting) ----------------
      * Protocol (kept tiny so any server can do it):
-     *   GET  <url>  -> 200 + the notes.json content (ETag header = version), or 404 when empty
+     *   GET  <url>  -> 200 + the remindate.json content (ETag header = version), or 404 when empty
      *   PUT  <url>  -> stores the JSON body; with "If-Match: <etag>" it answers 412 if
      *                  someone else saved in between. Answers with the new ETag.
      * Auth: "Authorization: Bearer <token>". scripts/remindate-sync-server.js does exactly this. */
@@ -4332,6 +4581,8 @@
             save: () => writeJSON(STORAGE.github, githubConfig),
             async fetch() {
                 const r = await fetchRemote();
+                // coming from the old notes.json: always write remindate.json once
+                if (r && r.legacy) return { rev: null, data: r.data, forcePush: true };
                 return r && { rev: r.sha, data: r.data };
             },
             async push(snap, rev) { await pushRemote(snap, rev); return githubConfig.sha; },
@@ -4394,7 +4645,7 @@
                     applySnapshot(merged);
                     pulled = true;
                 }
-                if (!remote || snapshotKey(merged) !== snapshotKey(remoteSnap)) {
+                if (!remote || remote.forcePush || snapshotKey(merged) !== snapshotKey(remoteSnap)) {
                     updateGithubStatus(`${p.label}: pushing…`);
                     try {
                         p.setRev(await p.push(merged, remote && remote.rev));
@@ -4556,7 +4807,7 @@
         localStorage.removeItem(STORAGE.github);
         $('ghOwner').value = '';
         $('ghRepo').value = '';
-        $('ghPath').value = 'notes.json';
+        $('ghPath').value = 'remindate.json';
         $('ghToken').value = '';
         $('ghAutoSync').checked = false;
         updateGithubStatus();
@@ -5168,15 +5419,28 @@
             e.preventDefault();
             newNote();
         }
-        // Ctrl+Z / Cmd+Z undoes the last stroke in draw mode and the last fill in grid mode
-        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && e.key.toLowerCase() === 'z') {
+        // Ctrl+Z / Cmd+Z undoes the last stroke in draw mode and the last fill in grid mode;
+        // Ctrl+Y (or Ctrl+Shift+Z) redoes it
+        const key = e.key.toLowerCase();
+        const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && key === 'z';
+        const isRedo = (e.ctrlKey || e.metaKey) && !e.altKey && ((key === 'y' && !e.shiftKey) || (key === 'z' && e.shiftKey));
+        if (isUndo || isRedo) {
             const mode = state.prefs.mode;
             const typing = e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]');
             const modalOpen = document.querySelector('.modal.active');
             if ((mode === 'draw' || mode === 'grid') && state.prefs.activeTab !== 'calendar' && !modalOpen
                 && !(typing && typing.offsetParent !== null) && state.currentNoteId) {
                 e.preventDefault();
-                $(mode === 'draw' ? 'toolUndo' : 'gridUndo').click();
+                if (isUndo) $(mode === 'draw' ? 'toolUndo' : 'gridUndo').click();
+                else if (mode === 'draw') redoDraw();
+                else redoGrid();
+            }
+        }
+        if (drawSel && state.prefs.mode === 'draw' && !document.querySelector('.modal.active')) {
+            const t = e.target.closest && e.target.closest('input, textarea, [contenteditable="true"]');
+            if (!(t && t.offsetParent !== null)) {
+                if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteSelectedPicture(); return; }
+                if (e.key === 'Escape') { drawSel = null; renderStrokes(); return; }
             }
         }
         if (e.key === 'Escape') closeModals();

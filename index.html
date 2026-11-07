@@ -152,6 +152,8 @@
                             <button class="tool-btn active" id="toolPen" title="Pen">✎</button>
                             <button class="tool-btn" id="toolEraser" title="Eraser">⌫</button>
                             <button class="tool-btn" id="toolFill" title="Fill canvas">▦</button>
+                            <button class="tool-btn" id="toolImage" title="Add a picture (or paste one with Ctrl+V)">🖼</button>
+                            <input type="file" id="drawImageFile" accept="image/*" multiple hidden>
                             <button class="tool-btn" id="toolUndo" title="Undo">↶</button>
                             <button class="tool-btn" id="toolClear" title="Clear all">✕</button>
                             <button class="tool-btn" id="toolCanvasBg" title="Canvas background">◧</button>
@@ -496,7 +498,7 @@
                     <ul>
                         <li><b>“Add the script property GITHUB_TOKEN first”</b>: step 5 is missing.</li>
                         <li><b>“GitHub refused the token”</b>: the token expired or can't read your data repo. Make a new one and paste it in the script property.</li>
-                        <li><b>“notes.json not found”</b>: GitHub Sync isn't on yet, or the repo name in the code doesn't match. Press <i>Sync now</i> in Remindate.</li>
+                        <li><b>“remindate.json not found”</b>: GitHub Sync isn't on yet, or the repo name in the code doesn't match. Press <i>Sync now</i> in Remindate.</li>
                         <li><b>No emails</b>: in Apps Script, <i>Triggers</i> should show <code>checkReminders</code>, and <i>Executions</i> a run every minute. If not, run <code>setup</code> again.</li>
                         <li>A normal Gmail account can send about 100 emails a day.</li>
                     </ul>
@@ -548,7 +550,7 @@
             </div>
             <div class="plan-row">
                 <label for="ghPath">File path</label>
-                <input type="text" id="ghPath" placeholder="notes.json" value="notes.json">
+                <input type="text" id="ghPath" placeholder="remindate.json" value="remindate.json">
             </div>
             <div class="plan-row">
                 <label for="ghToken">Personal Access Token</label>
@@ -572,10 +574,10 @@
                 <div>Sync Settings</div>
                 <button class="icon-btn" id="syncChooserClose" title="Close">&times;</button>
             </div>
-            <div class="github-help">Choose where your notes.json is kept in sync. You can use one or both; “Sync now” syncs everything that is set up.</div>
+            <div class="github-help">Choose where your remindate.json is kept in sync. You can use one or both; “Sync now” syncs everything that is set up.</div>
             <button class="sync-choice" id="syncChooseGithub" type="button">
                 <span class="sync-choice-icon">🐙</span>
-                <span class="sync-choice-text"><b>GitHub Sync</b><small>Free. Stores notes.json in a private GitHub repo. Needed for the email reminders.</small></span>
+                <span class="sync-choice-text"><b>GitHub Sync</b><small>Free. Stores remindate.json in a private GitHub repo. Needed for the email reminders.</small></span>
                 <span class="sync-choice-state" id="syncChooseGithubState"></span>
             </button>
             <button class="sync-choice" id="syncChooseServer" type="button">
@@ -595,12 +597,12 @@
                 <button class="icon-btn" id="serverClose" title="Close">&times;</button>
             </div>
             <div class="github-help">
-                Sync notes.json with your own server. Put <code>scripts/remindate-sync-server.js</code> on any paid host that runs Node.js (VPS, Railway, Render, …) and fill in its address and token below. See <code>SERVER-SYNC.md</code> for the steps.
+                Sync remindate.json with your own server. Put <code>scripts/remindate-sync-server.js</code> on any paid host that runs Node.js (VPS, Railway, Render, …) and fill in its address and token below. See <code>SERVER-SYNC.md</code> for the steps.
                 The address must use <code>https://</code>.
             </div>
             <div class="plan-row">
                 <label for="srvUrl">Server address</label>
-                <input type="url" id="srvUrl" placeholder="https://your-server.example.com/notes.json">
+                <input type="url" id="srvUrl" placeholder="https://your-server.example.com/remindate.json">
             </div>
             <div class="plan-row">
                 <label for="srvToken">Access token</label>

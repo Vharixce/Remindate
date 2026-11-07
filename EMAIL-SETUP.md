@@ -3,7 +3,7 @@
 Remindate is a website without its own server, so the emails are sent by a small
 **GitHub Actions** workflow in this repo (`Vharixce/Remindate`):
 
-- every ~10 minutes it reads `notes.json` from your private data repo (`Vharixce/Remindate-DATA-PRIVATE`),
+- every ~10 minutes it reads `remindate.json` from your private data repo (`Vharixce/Remindate-DATA-PRIVATE`),
 - emails every note that has **Send Email Notification** on and whose time (or repeat) just passed,
 - and writes `remindate-email-state.json` to the data repo so nothing is sent twice.
 
@@ -55,7 +55,7 @@ Optional settings go under the **Variables** tab on the same page:
 |-------------------------|------------------------------------------|
 | `REMINDATE_TIMEZONE`    | `Europe/Amsterdam`                       |
 | `REMINDATE_DATA_REPO`   | `Vharixce/Remindate-DATA-PRIVATE`        |
-| `REMINDATE_DATA_PATH`   | `notes.json`                             |
+| `REMINDATE_DATA_PATH`   | `remindate.json`                             |
 | `REMINDATE_APP_URL`     | `https://vharixce.github.io/Remindate/`  |
 
 ## 4. Put the workflow in place (this is why no emails were sent yet)
