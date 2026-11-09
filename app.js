@@ -2619,7 +2619,7 @@
         $('tabCalendar').classList.toggle('active', tab === 'calendar');
         $('viewNote').style.display = tab === 'note' ? 'flex' : 'none';
         $('viewCalendar').style.display = tab === 'calendar' ? 'flex' : 'none';
-        if (tab === 'calendar') renderCalendar();
+        applyCalendarMode(); // the calendar, or the world clocks
     }
 
     $('tabNote').addEventListener('click', () => setTab('note'));
@@ -2631,6 +2631,7 @@
         .map((d) => `<div class="calendar-weekday">${d}</div>`).join('');
 
     function renderCalendar() {
+        if (state.prefs.calendarMode === 'clock') return; // the world clocks are showing
         const cursor = state.calendarCursor;
         const year = cursor.getFullYear();
         const month = cursor.getMonth();
@@ -2725,6 +2726,8 @@
 
     const HOLIDAY_SETS = [
         { code: 'INT', label: 'International', short: 'Intl' },
+        { code: 'SKY', label: 'Seasons & clock changes', short: 'Seasons' },
+        { code: 'MOON', label: 'Moon phases & eclipses', short: 'Moon' },
         { code: 'GB', label: 'British', short: 'UK' },
         { code: 'NL', label: 'Dutch', short: 'NL' },
         { code: 'FR', label: 'French', short: 'FR' },
@@ -2732,6 +2735,117 @@
         { code: 'DE', label: 'German', short: 'DE' },
         { code: 'JP', label: 'Japanese', short: 'JP' }
     ];
+
+    /* ---------------- astronomy (all calculated, no internet needed) ----------------
+     * Moon phases: Meeus, Astronomical Algorithms ch. 49 (accurate to about a minute)
+     * Eclipses:    Meeus ch. 54 (which full/new moons give an eclipse, and what kind)
+     * Sun rise/set: the standard sunrise equation (accurate to a minute or two) */
+    const DEG = Math.PI / 180;
+    const sinD = (x) => Math.sin(x * DEG), cosD = (x) => Math.cos(x * DEG);
+    const jdToDate = (jde) => new Date((jde - 2440587.5) * 86400000 - 69000); // TT -> real time (~69 s)
+
+    const PHASE_ARGS = (M, Mp, F, O) => [
+        Mp, M, 2 * Mp, 2 * F, Mp - M, Mp + M, 2 * M, Mp - 2 * F, Mp + 2 * F, 2 * Mp + M, 3 * Mp, M + 2 * F, M - 2 * F,
+        2 * Mp - M, O, Mp + 2 * M, 2 * Mp - 2 * F, 3 * M, Mp + M - 2 * F, 2 * Mp + 2 * F, Mp + M + 2 * F, Mp - M + 2 * F,
+        Mp - M - 2 * F, 3 * Mp + M, 4 * Mp
+    ];
+    // [coefficient, power of E] for new moon / full moon
+    const NEW_TERMS = [[-0.40720, 0], [0.17241, 1], [0.01608, 0], [0.01039, 0], [0.00739, 1], [-0.00514, 1], [0.00208, 2],
+        [-0.00111, 0], [-0.00057, 0], [0.00056, 1], [-0.00042, 0], [0.00042, 1], [0.00038, 1], [-0.00024, 1], [-0.00017, 0],
+        [-0.00007, 0], [0.00004, 0], [0.00004, 0], [0.00003, 0], [0.00003, 0], [-0.00003, 0], [0.00003, 0], [-0.00002, 0],
+        [-0.00002, 0], [0.00002, 0]];
+    const FULL_TERMS = [[-0.40614, 0], [0.17302, 1], [0.01614, 0], [0.01043, 0], [0.00734, 1], [-0.00515, 1], [0.00209, 2],
+        [-0.00111, 0], [-0.00057, 0], [0.00056, 1], [-0.00042, 0], [0.00042, 1], [0.00038, 1], [-0.00024, 1], [-0.00017, 0],
+        [-0.00007, 0], [0.00004, 0], [0.00004, 0], [0.00003, 0], [0.00003, 0], [-0.00003, 0], [0.00003, 0], [-0.00002, 0],
+        [-0.00002, 0], [0.00002, 0]];
+
+    function lunation(k) { // k whole = new moon, k + 0.5 = full moon
+        const T = k / 1236.85;
+        const full = Math.abs(k % 1) > 0.25;
+        const E = 1 - 0.002516 * T - 0.0000074 * T * T;
+        const M = 2.5534 + 29.10535670 * k - 0.0000014 * T * T - 0.00000011 * T ** 3;
+        const Mp = 201.5643 + 385.81693528 * k + 0.0107582 * T * T + 0.00001238 * T ** 3 - 0.000000058 * T ** 4;
+        const F = 160.7108 + 390.67050284 * k - 0.0016118 * T * T - 0.00000227 * T ** 3 + 0.000000011 * T ** 4;
+        const O = 124.7746 - 1.56375588 * k + 0.0020672 * T * T + 0.00000215 * T ** 3;
+        const jde0 = 2451550.09766 + 29.530588861 * k + 0.00015437 * T * T - 0.000000150 * T ** 3 + 0.00000000073 * T ** 4;
+        const args = PHASE_ARGS(M, Mp, F, O);
+        let jde = jde0;
+        (full ? FULL_TERMS : NEW_TERMS).forEach(([c, e], i) => { jde += c * E ** e * sinD(args[i]); });
+        // planetary corrections (largest ones)
+        const A = [299.77 + 0.107408 * k - 0.009173 * T * T, 251.88 + 0.016321 * k, 251.83 + 26.651886 * k,
+            349.42 + 36.412478 * k, 84.66 + 18.206239 * k, 141.74 + 53.303771 * k, 207.14 + 2.453732 * k];
+        [0.000325, 0.000165, 0.000164, 0.000126, 0.000110, 0.000062, 0.000060].forEach((c, i) => { jde += c * sinD(A[i]); });
+        return { jde, full, T, E, M, Mp, F, O };
+    }
+
+    // Is there an eclipse at this new/full moon? (Meeus ch. 54)
+    function eclipseAt(k) {
+        const { full, T, E, M, Mp, F, O } = lunation(k);
+        if (Math.abs(sinD(F)) > 0.36) return null;
+        const F1 = F - 0.02665 * sinD(O);
+        const A1 = 299.77 + 0.107408 * k - 0.009173 * T * T;
+        let jde = 2451550.09766 + 29.530588861 * k + 0.00015437 * T * T - 0.000000150 * T ** 3 + 0.00000000073 * T ** 4;
+        jde += (full ? -0.4065 : -0.4075) * sinD(Mp) + (full ? 0.1727 : 0.1721) * E * sinD(M)
+            + 0.0161 * sinD(2 * Mp) - 0.0097 * sinD(2 * F1) + 0.0073 * E * sinD(Mp - M) - 0.0050 * E * sinD(Mp + M)
+            - 0.0023 * sinD(Mp - 2 * F1) + 0.0021 * E * sinD(2 * M) + 0.0012 * sinD(Mp + 2 * F1) + 0.0006 * E * sinD(2 * Mp + M)
+            - 0.0004 * sinD(3 * Mp) - 0.0003 * E * sinD(M + 2 * F1) + 0.0003 * sinD(A1) - 0.0002 * E * sinD(M - 2 * F1)
+            - 0.0002 * E * sinD(2 * Mp - M) - 0.0002 * sinD(O);
+        const P = 0.2070 * E * sinD(M) + 0.0024 * E * sinD(2 * M) - 0.0392 * sinD(Mp) + 0.0116 * sinD(2 * Mp)
+            - 0.0073 * E * sinD(Mp + M) + 0.0067 * E * sinD(Mp - M) + 0.0118 * sinD(2 * F1);
+        const Q = 5.2207 - 0.0048 * E * cosD(M) + 0.0020 * E * cosD(2 * M) - 0.3299 * cosD(Mp)
+            - 0.0060 * E * cosD(Mp + M) + 0.0041 * E * cosD(Mp - M);
+        const W = Math.abs(cosD(F1));
+        const gamma = (P * cosD(F1) + Q * sinD(F1)) * (1 - 0.0048 * W);
+        const u = 0.0059 + 0.0046 * E * cosD(M) - 0.0182 * cosD(Mp) + 0.0004 * cosD(2 * Mp) - 0.0005 * cosD(M + Mp);
+        const g = Math.abs(gamma);
+        let kind = null;
+        if (!full) {
+            if (g > 1.5433 + u) return null;
+            if (g < 0.9972) kind = u < 0 ? 'Total solar eclipse' : u > 0.0047 ? 'Annular solar eclipse'
+                : (u < 0.00464 * Math.sqrt(1 - gamma * gamma) ? 'Hybrid solar eclipse' : 'Annular solar eclipse');
+            else kind = g < 0.9972 + Math.abs(u) ? (u < 0 ? 'Total solar eclipse' : 'Annular solar eclipse') : 'Partial solar eclipse';
+        } else {
+            const pen = (1.5573 + u - g) / 0.5450;
+            const umb = (1.0128 - u - g) / 0.5450;
+            if (pen < 0) return null;
+            kind = umb < 0 ? 'Penumbral lunar eclipse' : umb >= 1 ? 'Total lunar eclipse' : 'Partial lunar eclipse';
+        }
+        return { kind, date: jdToDate(jde), solar: !full };
+    }
+
+    // All new moons, full moons and eclipses whose moment falls in year y (in this device's time zone)
+    function moonEvents(y) {
+        const out = [];
+        const k0 = Math.floor((y - 2000) * 12.3685) - 2;
+        for (let k = k0; k < k0 + 16; k++) {
+            [k, k + 0.5].forEach((kk) => {
+                const { jde, full } = lunation(kk);
+                const date = jdToDate(jde);
+                if (date.getFullYear() === y) out.push({ type: full ? 'full' : 'new', date });
+                const ecl = eclipseAt(kk);
+                if (ecl && ecl.date.getFullYear() === y) out.push({ type: 'eclipse', ...ecl });
+            });
+        }
+        return out.sort((a, b) => a.date - b.date);
+    }
+
+    // Sunrise and sunset for a place on a calendar day (y, m 1-12, d); null = sun stays up / down
+    function sunTimes(lat, lon, y, m, d) {
+        const n = Math.round((Date.UTC(y, m - 1, d, 12) - Date.UTC(2000, 0, 1, 12)) / 86400000);
+        const Js = n - lon / 360;
+        const M = (357.5291 + 0.98560028 * Js) % 360;
+        const C = 1.9148 * sinD(M) + 0.0200 * sinD(2 * M) + 0.0003 * sinD(3 * M);
+        const lambda = (M + C + 180 + 102.9372) % 360;
+        const transit = 2451545.0 + Js + 0.0053 * sinD(M) - 0.0069 * sinD(2 * lambda);
+        const sinDec = sinD(lambda) * sinD(23.4397);
+        const cosDec = Math.cos(Math.asin(sinDec));
+        const cosW = (sinD(-0.833) - sinD(lat) * sinDec) / (cosD(lat) * cosDec);
+        const toDate = (jd) => new Date((jd - 2440587.5) * 86400000);
+        if (cosW > 1) return { polar: 'night', noon: toDate(transit) };
+        if (cosW < -1) return { polar: 'day', noon: toDate(transit) };
+        const w = Math.acos(cosW) / DEG;
+        return { rise: toDate(transit - w / 360), set: toDate(transit + w / 360), noon: toDate(transit) };
+    }
 
     // Easter Sunday (Gregorian calendar, "anonymous" algorithm)
     function easterSunday(y) {
@@ -2751,6 +2865,45 @@
     // first given weekday on or after a date
     const weekdayFrom = (date, wd) => addDays(date, (wd - date.getDay() + 7) % 7);
 
+    // Equinoxes and solstices (Meeus, Astronomical Algorithms ch. 27; accurate to about a minute)
+    const SEASON_TERMS = [
+        [485, 324.96, 1934.136], [203, 337.23, 32964.467], [199, 342.08, 20.186], [182, 27.85, 445267.112],
+        [156, 73.14, 45036.886], [136, 171.52, 22518.443], [77, 222.54, 65928.934], [74, 296.72, 3034.906],
+        [70, 243.58, 9037.513], [58, 119.81, 33718.147], [52, 297.17, 150.678], [50, 21.02, 2281.226],
+        [45, 247.54, 29929.562], [44, 325.15, 31555.956], [29, 60.93, 4443.417], [18, 155.12, 67555.328],
+        [17, 288.79, 4562.452], [16, 198.04, 62894.029], [14, 199.76, 31436.921], [12, 95.39, 14577.848],
+        [12, 287.11, 31931.756], [12, 320.81, 34777.259], [9, 227.73, 1222.114], [8, 15.45, 16859.074]
+    ];
+    function seasonMoment(y, which) { // which: 0 March, 1 June, 2 September, 3 December
+        const Y = (y - 2000) / 1000;
+        const c = [
+            [2451623.80984, 365242.37404, 0.05169, -0.00411, -0.00057],
+            [2451716.56767, 365241.62603, 0.00325, 0.00888, -0.00030],
+            [2451810.21715, 365242.01767, -0.11575, 0.00337, 0.00078],
+            [2451900.05952, 365242.74049, -0.06223, -0.00823, 0.00032]
+        ][which];
+        const jde0 = c[0] + c[1] * Y + c[2] * Y * Y + c[3] * Y ** 3 + c[4] * Y ** 4;
+        const T = (jde0 - 2451545.0) / 36525;
+        const rad = Math.PI / 180;
+        const W = (35999.373 * T - 2.47) * rad;
+        const dl = 1 + 0.0334 * Math.cos(W) + 0.0007 * Math.cos(2 * W);
+        const S = SEASON_TERMS.reduce((sum, [A, B, C]) => sum + A * Math.cos((B + C * T) * rad), 0);
+        const jde = jde0 + 0.00001 * S / dl;
+        // Julian day (Terrestrial Time) -> real time (about 69 s difference)
+        return new Date((jde - 2440587.5) * 86400000 - 69000);
+    }
+
+    // Days the clocks change, read from this device's own time zone
+    function clockChanges(y) {
+        const out = [];
+        for (let d = D(y, 1, 1); d.getFullYear() === y; d = addDays(d, 1)) {
+            const before = d.getTimezoneOffset();
+            const after = addDays(d, 1).getTimezoneOffset();
+            if (before !== after) out.push({ date: d, forward: after < before, minutes: Math.abs(after - before) });
+        }
+        return out;
+    }
+
     function holidayList(code, y) {
         const E = easterSunday(y);
         const H = (date, name, local) => ({ date, name, local: local || '', obs: false });
@@ -2758,6 +2911,29 @@
         const O = (date, name, local) => ({ date, name, local: local || '', obs: true });
         const lastSunday = (m) => lastWeekday(y, m, 0);
         switch (code) {
+            case 'MOON': {
+                const hm = (t) => `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+                return moonEvents(y).map((e) => {
+                    const day = D(e.date.getFullYear(), e.date.getMonth() + 1, e.date.getDate());
+                    if (e.type === 'full') return O(day, '🌕 Full moon', `at ${hm(e.date)}`);
+                    if (e.type === 'new') return O(day, '🌑 New moon', `at ${hm(e.date)}`);
+                    return O(day, `${e.solar ? '🌘' : '🌒'} ${e.kind}`, `greatest at ${hm(e.date)}, not visible everywhere`);
+                });
+            }
+            case 'SKY': {
+                const hm = (t) => `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+                const names = ['Spring equinox', 'Summer solstice (longest day)', 'Autumn equinox', 'Winter solstice (shortest day)'];
+                const list = names.map((name, i) => {
+                    const t = seasonMoment(y, i);
+                    return O(D(t.getFullYear(), t.getMonth() + 1, t.getDate()), name, `at ${hm(t)}`);
+                });
+                clockChanges(y).forEach((c) => {
+                    const amount = c.minutes === 60 ? '1 hour' : `${c.minutes} min`;
+                    list.push(O(c.date, c.forward ? 'Summer time starts' : 'Winter time starts',
+                        c.forward ? `clocks go forward ${amount}` : `clocks go back ${amount}`));
+                });
+                return list;
+            }
             case 'INT': return [
                 H(D(y, 1, 1), "New Year's Day"), H(D(y, 2, 14), "Valentine's Day"),
                 H(D(y, 3, 8), "International Women's Day"), H(D(y, 4, 22), 'Earth Day'),
@@ -2922,6 +3098,257 @@
     function holidayTitle(h) {
         return `${h.name}${h.locals.length ? ` (${h.locals.join(' / ')})` : ''} · ${h.sets.join(', ')} ${h.obs ? 'observance' : 'holiday'}`;
     }
+
+    /* ---------------- world clocks (Calendar tab → Clock) ---------------- */
+    // id, name, country, IANA time zone, latitude, longitude
+    const CLOCK_CITIES = [
+        ['amsterdam', 'Amsterdam', 'Netherlands', 'Europe/Amsterdam', 52.37, 4.90],
+        ['london', 'London', 'United Kingdom', 'Europe/London', 51.51, -0.13],
+        ['dublin', 'Dublin', 'Ireland', 'Europe/Dublin', 53.35, -6.26],
+        ['paris', 'Paris', 'France', 'Europe/Paris', 48.86, 2.35],
+        ['brussels', 'Brussels', 'Belgium', 'Europe/Brussels', 50.85, 4.35],
+        ['berlin', 'Berlin', 'Germany', 'Europe/Berlin', 52.52, 13.40],
+        ['madrid', 'Madrid', 'Spain', 'Europe/Madrid', 40.42, -3.70],
+        ['lisbon', 'Lisbon', 'Portugal', 'Europe/Lisbon', 38.72, -9.14],
+        ['rome', 'Rome', 'Italy', 'Europe/Rome', 41.90, 12.50],
+        ['vienna', 'Vienna', 'Austria', 'Europe/Vienna', 48.21, 16.37],
+        ['copenhagen', 'Copenhagen', 'Denmark', 'Europe/Copenhagen', 55.68, 12.57],
+        ['oslo', 'Oslo', 'Norway', 'Europe/Oslo', 59.91, 10.75],
+        ['stockholm', 'Stockholm', 'Sweden', 'Europe/Stockholm', 59.33, 18.07],
+        ['helsinki', 'Helsinki', 'Finland', 'Europe/Helsinki', 60.17, 24.94],
+        ['reykjavik', 'Reykjavík', 'Iceland', 'Atlantic/Reykjavik', 64.15, -21.94],
+        ['warsaw', 'Warsaw', 'Poland', 'Europe/Warsaw', 52.23, 21.01],
+        ['athens', 'Athens', 'Greece', 'Europe/Athens', 37.98, 23.73],
+        ['istanbul', 'Istanbul', 'Türkiye', 'Europe/Istanbul', 41.01, 28.98],
+        ['moscow', 'Moscow', 'Russia', 'Europe/Moscow', 55.76, 37.62],
+        ['cairo', 'Cairo', 'Egypt', 'Africa/Cairo', 30.04, 31.24],
+        ['lagos', 'Lagos', 'Nigeria', 'Africa/Lagos', 6.52, 3.38],
+        ['nairobi', 'Nairobi', 'Kenya', 'Africa/Nairobi', -1.29, 36.82],
+        ['johannesburg', 'Johannesburg', 'South Africa', 'Africa/Johannesburg', -26.20, 28.05],
+        ['riyadh', 'Riyadh', 'Saudi Arabia', 'Asia/Riyadh', 24.71, 46.68],
+        ['dubai', 'Dubai', 'United Arab Emirates', 'Asia/Dubai', 25.20, 55.27],
+        ['tehran', 'Tehran', 'Iran', 'Asia/Tehran', 35.69, 51.39],
+        ['new-delhi', 'New Delhi', 'India', 'Asia/Kolkata', 28.61, 77.21],
+        ['bangkok', 'Bangkok', 'Thailand', 'Asia/Bangkok', 13.76, 100.50],
+        ['jakarta', 'Jakarta', 'Indonesia', 'Asia/Jakarta', -6.21, 106.85],
+        ['singapore', 'Singapore', 'Singapore', 'Asia/Singapore', 1.35, 103.82],
+        ['manila', 'Manila', 'Philippines', 'Asia/Manila', 14.60, 120.98],
+        ['hong-kong', 'Hong Kong', 'China', 'Asia/Hong_Kong', 22.32, 114.17],
+        ['beijing', 'Beijing', 'China', 'Asia/Shanghai', 39.90, 116.41],
+        ['seoul', 'Seoul', 'South Korea', 'Asia/Seoul', 37.57, 126.98],
+        ['tokyo', 'Tokyo', 'Japan', 'Asia/Tokyo', 35.68, 139.69],
+        ['sydney', 'Sydney', 'Australia', 'Australia/Sydney', -33.87, 151.21],
+        ['canberra', 'Canberra', 'Australia', 'Australia/Sydney', -35.28, 149.13],
+        ['auckland', 'Auckland', 'New Zealand', 'Pacific/Auckland', -36.85, 174.76],
+        ['honolulu', 'Honolulu', 'United States', 'Pacific/Honolulu', 21.31, -157.86],
+        ['anchorage', 'Anchorage', 'United States', 'America/Anchorage', 61.22, -149.90],
+        ['los-angeles', 'Los Angeles', 'United States', 'America/Los_Angeles', 34.05, -118.24],
+        ['vancouver', 'Vancouver', 'Canada', 'America/Vancouver', 49.28, -123.12],
+        ['denver', 'Denver', 'United States', 'America/Denver', 39.74, -104.99],
+        ['mexico-city', 'Mexico City', 'Mexico', 'America/Mexico_City', 19.43, -99.13],
+        ['chicago', 'Chicago', 'United States', 'America/Chicago', 41.88, -87.63],
+        ['toronto', 'Toronto', 'Canada', 'America/Toronto', 43.65, -79.38],
+        ['ottawa', 'Ottawa', 'Canada', 'America/Toronto', 45.42, -75.70],
+        ['new-york', 'New York', 'United States', 'America/New_York', 40.71, -74.01],
+        ['washington', 'Washington, D.C.', 'United States', 'America/New_York', 38.90, -77.04],
+        ['bogota', 'Bogotá', 'Colombia', 'America/Bogota', 4.71, -74.07],
+        ['lima', 'Lima', 'Peru', 'America/Lima', -12.05, -77.04],
+        ['santiago', 'Santiago', 'Chile', 'America/Santiago', -33.45, -70.67],
+        ['buenos-aires', 'Buenos Aires', 'Argentina', 'America/Argentina/Buenos_Aires', -34.60, -58.38],
+        ['sao-paulo', 'São Paulo', 'Brazil', 'America/Sao_Paulo', -23.55, -46.63],
+        ['brasilia', 'Brasília', 'Brazil', 'America/Sao_Paulo', -15.79, -47.88]
+    ].map(([id, name, country, tz, lat, lon]) => ({ id, name, country, tz, lat, lon }));
+    const cityById = new Map(CLOCK_CITIES.map((c) => [c.id, c]));
+    const LOCAL_TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch (err) { return ''; } })();
+
+    function clockInfo(id) {
+        if (id === 'local') {
+            // your own clock: use a known city in your time zone for sunrise / sunset
+            const city = CLOCK_CITIES.find((c) => c.tz === LOCAL_TZ);
+            return { id, name: 'Your time', country: city ? city.name : LOCAL_TZ.replace(/_/g, ' '), tz: LOCAL_TZ || undefined,
+                lat: city ? city.lat : null, lon: city ? city.lon : null, local: true };
+        }
+        return cityById.get(id) || null;
+    }
+
+    const partsCache = new Map();
+    function zoneParts(tz, date) {
+        let fmt = partsCache.get(tz || '');
+        if (!fmt) {
+            fmt = new Intl.DateTimeFormat('en-GB', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: 'numeric',
+                day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', weekday: 'short' });
+            partsCache.set(tz || '', fmt);
+        }
+        const p = {};
+        fmt.formatToParts(date).forEach(({ type, value }) => { p[type] = value; });
+        return { y: +p.year, m: +p.month, d: +p.day, h: +p.hour % 24, min: +p.minute, s: +p.second, wd: p.weekday };
+    }
+    const pad2 = (n) => String(n).padStart(2, '0');
+    // minutes ahead of UTC
+    function zoneOffset(tz, date) {
+        const p = zoneParts(tz, date);
+        return Math.round((Date.UTC(p.y, p.m - 1, p.d, p.h, p.min, p.s) - date.getTime()) / 60000);
+    }
+    const zoneHM = (tz, date) => { const p = zoneParts(tz, date); return `${pad2(p.h)}:${pad2(p.min)}`; };
+
+    function clockFaceSvg() {
+        let ticks = '';
+        for (let i = 0; i < 60; i++) {
+            const big = i % 5 === 0;
+            ticks += `<line x1="50" y1="${big ? 6 : 7}" x2="50" y2="${big ? 13 : 10}" class="${big ? 'tick-big' : 'tick'}" transform="rotate(${i * 6} 50 50)"/>`;
+        }
+        let nums = '';
+        for (let i = 1; i <= 12; i++) {
+            const a = i * 30 * DEG;
+            nums += `<text x="${(50 + 30 * Math.sin(a)).toFixed(2)}" y="${(50 - 30 * Math.cos(a) + 3.6).toFixed(2)}">${i}</text>`;
+        }
+        return `<svg viewBox="0 0 100 100" class="clock-face" aria-hidden="true">
+            <circle cx="50" cy="50" r="47" class="rim"/>
+            ${ticks}<g class="nums">${nums}</g>
+            <line x1="50" y1="55" x2="50" y2="27" class="hand hour"/>
+            <line x1="50" y1="57" x2="50" y2="15" class="hand minute"/>
+            <line x1="50" y1="60" x2="50" y2="11" class="hand second"/>
+            <circle cx="50" cy="50" r="2.4" class="pin"/>
+        </svg>`;
+    }
+
+    function clockIds() {
+        if (!Array.isArray(state.prefs.clocks)) state.prefs.clocks = ['local', 'tokyo', 'paris', 'new-york'];
+        return state.prefs.clocks.filter((id) => clockInfo(id));
+    }
+
+    function renderClocks() {
+        const now = new Date();
+        $('clockGrid').innerHTML = clockIds().map((id) => {
+            const c = clockInfo(id);
+            return `<div class="clock-card" data-clock-id="${id}">
+                ${c.local ? '' : `<button class="clock-remove icon-btn" type="button" title="Remove ${escapeHtml(c.name)}" aria-label="Remove ${escapeHtml(c.name)}">&times;</button>`}
+                ${clockFaceSvg()}
+                <div class="clock-name">${escapeHtml(c.name)}</div>
+                <div class="clock-sub">${escapeHtml(c.country)}</div>
+                <div class="clock-digital"></div>
+                <div class="clock-date"></div>
+                <div class="clock-diff"></div>
+                <div class="clock-sun"></div>
+            </div>`;
+        }).join('') + `<button class="clock-card clock-add" id="clockAdd" type="button"><span class="clock-add-plus">+</span><span>Add clock</span></button>`;
+        updateClocks(now, true);
+    }
+
+    let lastSunDay = '';
+    function updateClocks(now = new Date(), force = false) {
+        const localOffset = -now.getTimezoneOffset();
+        const dayStamp = `${now.getUTCFullYear()}-${now.getUTCMonth()}-${now.getUTCDate()}-${now.getUTCHours()}`;
+        const sunNeeded = force || dayStamp !== lastSunDay;
+        lastSunDay = dayStamp;
+        document.querySelectorAll('#clockGrid .clock-card[data-clock-id]').forEach((card) => {
+            const c = clockInfo(card.dataset.clockId);
+            if (!c) return;
+            const p = zoneParts(c.tz, now);
+            const set = (cls, deg) => card.querySelector(cls).setAttribute('transform', `rotate(${deg.toFixed(2)} 50 50)`);
+            set('.hand.hour', (p.h % 12) * 30 + p.min * 0.5 + p.s / 120);
+            set('.hand.minute', p.min * 6 + p.s * 0.1);
+            set('.hand.second', p.s * 6);
+            card.querySelector('.clock-digital').textContent = `${pad2(p.h)}:${pad2(p.min)}:${pad2(p.s)}`;
+            card.querySelector('.clock-date').textContent = `${p.wd} ${p.d} ${MONTHS[p.m - 1]} ${p.y}`;
+            if (!sunNeeded) return;
+            const diff = zoneOffset(c.tz, now) - localOffset;
+            const h = Math.trunc(diff / 60), m = Math.abs(diff % 60);
+            card.querySelector('.clock-diff').textContent = c.local ? 'This device' : diff === 0 ? 'Same time as you'
+                : `${diff > 0 ? '+' : '−'}${Math.abs(h)}${m ? `:${pad2(m)}` : ''} h`;
+            let sunText = '', isDay = p.h >= 7 && p.h < 19;
+            if (c.lat !== null && c.lat !== undefined) {
+                const sun = sunTimes(c.lat, c.lon, p.y, p.m, p.d);
+                if (sun.polar === 'day') { sunText = '☀️ Sun up all day'; isDay = true; }
+                else if (sun.polar === 'night') { sunText = '🌙 Sun down all day'; isDay = false; }
+                else {
+                    sunText = `🌅 ${zoneHM(c.tz, sun.rise)} · 🌇 ${zoneHM(c.tz, sun.set)}`;
+                    isDay = now >= sun.rise && now < sun.set;
+                }
+            }
+            card.querySelector('.clock-sun').textContent = sunText;
+            card.querySelector('.clock-sun').title = sunText ? 'Sunrise · sunset today (local time there)' : '';
+            card.classList.toggle('night', !isDay);
+        });
+    }
+
+    let clockTimer = null;
+    function setCalendarMode(mode) {
+        state.prefs.calendarMode = mode === 'clock' ? 'clock' : 'calendar';
+        savePrefs();
+        applyCalendarMode();
+    }
+    function applyCalendarMode() {
+        const clock = state.prefs.calendarMode === 'clock' && state.prefs.activeTab === 'calendar';
+        const inCal = state.prefs.calendarMode === 'clock';
+        $('calendarPane').hidden = inCal;
+        $('clockPane').hidden = !inCal;
+        $('calPrev').hidden = inCal;
+        $('calNext').hidden = inCal;
+        $('calendarMonth').textContent = inCal ? 'World clocks' : $('calendarMonth').textContent;
+        $('clockToggle').innerHTML = inCal ? '📅 Calendar' : '🕐 Clock';
+        $('clockToggle').title = inCal ? 'Back to the calendar' : 'World clocks';
+        clearInterval(clockTimer);
+        clockTimer = null;
+        if (clock) {
+            renderClocks();
+            // tick right on the second
+            setTimeout(() => {
+                updateClocks();
+                if (state.prefs.calendarMode === 'clock' && state.prefs.activeTab === 'calendar' && !clockTimer) {
+                    clockTimer = setInterval(() => { if (!document.hidden) updateClocks(); }, 1000);
+                }
+            }, 1000 - (Date.now() % 1000));
+        } else if (!inCal) {
+            renderCalendar();
+        }
+    }
+    $('clockToggle').addEventListener('click', () => setCalendarMode(state.prefs.calendarMode === 'clock' ? 'calendar' : 'clock'));
+
+    $('clockGrid').addEventListener('click', (e) => {
+        if (e.target.closest('#clockAdd')) { openClockPicker(); return; }
+        const remove = e.target.closest('.clock-remove');
+        if (remove) {
+            const id = remove.closest('.clock-card').dataset.clockId;
+            state.prefs.clocks = clockIds().filter((x) => x !== id);
+            savePrefs();
+            renderClocks();
+        }
+    });
+
+    function openClockPicker() {
+        $('clockSearch').value = '';
+        renderClockPicker();
+        openModal('clockModal');
+        if (!isMobile()) setTimeout(() => $('clockSearch').focus(), 30);
+    }
+    function renderClockPicker() {
+        const q = $('clockSearch').value.trim().toLowerCase();
+        const have = new Set(clockIds());
+        const list = CLOCK_CITIES.filter((c) => !q || `${c.name} ${c.country}`.toLowerCase().includes(q));
+        const now = new Date();
+        $('clockCityList').innerHTML = list.length ? list.map((c) => `
+            <button class="clock-city${have.has(c.id) ? ' added' : ''}" type="button" data-city="${c.id}" ${have.has(c.id) ? 'disabled' : ''}>
+                <span><b>${escapeHtml(c.name)}</b> <span class="clock-city-country">${escapeHtml(c.country)}</span></span>
+                <span class="clock-city-time">${have.has(c.id) ? 'Added' : zoneHM(c.tz, now)}</span>
+            </button>`).join('') : '<div class="calendar-hint">No city found.</div>';
+    }
+    $('clockSearch').addEventListener('input', renderClockPicker);
+    $('clockSearch').addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const first = $('clockCityList').querySelector('.clock-city:not([disabled])');
+        if (first) first.click();
+    });
+    $('clockCityList').addEventListener('click', (e) => {
+        const btn = e.target.closest('.clock-city');
+        if (!btn || btn.disabled) return;
+        state.prefs.clocks = clockIds().concat(btn.dataset.city);
+        savePrefs();
+        closeModals();
+        renderClocks();
+    });
+    $('clockClose').addEventListener('click', closeModals);
+    $('clockBackdrop').addEventListener('click', closeModals);
 
     /* settings window: which holidays to show */
     $('holidayOptions').innerHTML = HOLIDAY_SETS.map((s) =>

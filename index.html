@@ -241,10 +241,16 @@
                         <button class="icon-btn" id="calPrev" title="Previous month">‹</button>
                         <div class="calendar-month" id="calendarMonth"></div>
                         <button class="icon-btn" id="calNext" title="Next month">›</button>
+                        <button class="btn clock-toggle" id="clockToggle" type="button" title="World clocks">🕐 Clock</button>
                     </div>
-                    <div class="calendar-weekdays" id="calendarWeekdays"></div>
-                    <div class="calendar-grid" id="calendarGrid"></div>
-                    <div class="calendar-day-notes" id="calendarDayNotes"></div>
+                    <div class="calendar-pane" id="calendarPane">
+                        <div class="calendar-weekdays" id="calendarWeekdays"></div>
+                        <div class="calendar-grid" id="calendarGrid"></div>
+                        <div class="calendar-day-notes" id="calendarDayNotes"></div>
+                    </div>
+                    <div class="clock-pane" id="clockPane" hidden>
+                        <div class="clock-grid" id="clockGrid"></div>
+                    </div>
                 </section>
             </div>
         </main>
@@ -658,6 +664,19 @@
                 <button class="btn btn-primary" id="serverSaveBtn">Save</button>
             </div>
             <div class="github-tip">Your token is stored only in this browser local storage. Email reminders still read from GitHub.</div>
+        </div>
+    </div>
+
+    <!-- Add a world clock -->
+    <div class="modal" id="clockModal">
+        <div class="modal-backdrop" id="clockBackdrop"></div>
+        <div class="modal-content clock-modal">
+            <div class="modal-header">
+                <div>Add a clock</div>
+                <button class="icon-btn" id="clockClose" title="Close">&times;</button>
+            </div>
+            <input type="search" id="clockSearch" placeholder="Search a city or country…" autocomplete="off" aria-label="Search a city or country">
+            <div class="clock-city-list" id="clockCityList"></div>
         </div>
     </div>
 

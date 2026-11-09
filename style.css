@@ -1749,3 +1749,65 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .private-lock-box.shake { animation: lockShake .35s; }
 @keyframes lockShake { 20%, 60% { transform: translateX(-6px); } 40%, 80% { transform: translateX(6px); } }
 #passCurrentRow[hidden] { display: none; }
+
+/* ---------- Calendar ↔ Clock ---------- */
+.calendar-header { position: relative; }
+.calendar-header .icon-btn[hidden] { display: none; }
+.clock-toggle { position: absolute; right: 0; top: 50%; transform: translateY(-50%); padding: 6px 12px; white-space: nowrap; }
+.calendar-pane { display: flex; flex-direction: column; gap: 12px; }
+.calendar-pane[hidden], .clock-pane[hidden] { display: none; }
+
+/* ---------- world clocks ---------- */
+.clock-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; }
+.clock-card {
+    position: relative; display: flex; flex-direction: column; align-items: center; gap: 2px;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 16px 12px 14px;
+}
+.clock-face { width: 140px; height: 140px; margin-bottom: 8px; }
+.clock-face .rim { fill: #f5f5f7; stroke: var(--border); stroke-width: 1.5; }
+.clock-face .tick { stroke: #9ca3af; stroke-width: .6; }
+.clock-face .tick-big { stroke: #374151; stroke-width: 1.6; stroke-linecap: round; }
+.clock-face .nums text { font-size: 9px; text-anchor: middle; fill: #1f2937; font-weight: 600; font-family: inherit; }
+.clock-face .hand { stroke-linecap: round; }
+.clock-face .hand.hour { stroke: #111827; stroke-width: 3.4; }
+.clock-face .hand.minute { stroke: #111827; stroke-width: 2.2; }
+.clock-face .hand.second { stroke: #7c6ff0; stroke-width: 1; }
+.clock-face .pin { fill: #7c6ff0; }
+/* night there: dark clock face */
+.clock-card.night .clock-face .rim { fill: #1e1b3a; stroke: #3b3670; }
+.clock-card.night .clock-face .tick { stroke: #6b6aa0; }
+.clock-card.night .clock-face .tick-big { stroke: #c7c4f5; }
+.clock-card.night .clock-face .nums text { fill: #e5e3ff; }
+.clock-card.night .clock-face .hand.hour, .clock-card.night .clock-face .hand.minute { stroke: #f5f5ff; }
+.clock-name { font-size: 16px; font-weight: 600; text-align: center; }
+.clock-sub { font-size: 12px; color: var(--text-dim); text-align: center; }
+.clock-digital { font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: 6px; letter-spacing: .5px; }
+.clock-date { font-size: 13px; color: var(--text-dim); }
+.clock-diff { font-size: 12px; color: var(--primary); margin-top: 2px; }
+.clock-sun { font-size: 12px; color: var(--text-dim); margin-top: 4px; min-height: 16px; text-align: center; }
+.clock-remove { position: absolute; top: 6px; right: 6px; opacity: 0; transition: opacity .15s; }
+.clock-card:hover .clock-remove, .clock-remove:focus-visible { opacity: 1; }
+@media (hover: none) { .clock-remove { opacity: .7; } }
+.clock-add {
+    justify-content: center; min-height: 240px; cursor: pointer; color: var(--text-dim); font: inherit;
+    border-style: dashed; background: transparent;
+}
+.clock-add:hover { color: var(--text); border-color: var(--primary); }
+.clock-add-plus { font-size: 34px; line-height: 1; }
+.clock-modal { width: 420px; }
+.clock-city-list { display: flex; flex-direction: column; gap: 4px; max-height: 50vh; overflow-y: auto; }
+.clock-city {
+    display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 9px 10px;
+    background: transparent; border: 1px solid transparent; border-radius: 8px; color: var(--text); font: inherit; text-align: left; cursor: pointer;
+}
+.clock-city:hover:not([disabled]) { background: var(--hover); border-color: var(--border); }
+.clock-city[disabled] { opacity: .5; cursor: default; }
+.clock-city-country { color: var(--text-dim); font-size: 12px; margin-left: 4px; }
+.clock-city-time { font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: 13px; }
+@media (max-width: 760px) {
+    .clock-toggle { position: static; transform: none; margin-left: auto; }
+    .calendar-header { justify-content: flex-start; gap: 8px; }
+    .clock-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+    .clock-face { width: 110px; height: 110px; }
+    .clock-digital { font-size: 18px; }
+}
