@@ -4404,7 +4404,7 @@
      * (e.g. after ticking "prevent this page from creating dialogs"). */
     let dialogResolve = null;
 
-    function askDialog({ title, message = '', input = null, okLabel = 'OK', danger = false, altLabel = null }) {
+    function askDialog({ title, message = '', input = null, okLabel = 'OK', danger = false, altLabel = null, password = false }) {
         return new Promise((resolve) => {
             if (dialogResolve) finishDialog(false);
             dialogResolve = resolve;
@@ -4416,6 +4416,9 @@
             const field = $('dialogInput');
             field.hidden = input === null;
             field.value = input === null ? '' : input;
+            field.type = password ? 'password' : 'text';
+            field.autocomplete = password ? 'off' : '';
+            field.placeholder = password ? 'Private Note Pass' : '';
             const ok = $('dialogOk');
             ok.textContent = okLabel;
             ok.classList.toggle('btn-danger', danger);
@@ -5176,8 +5179,23 @@
 
     /* ---------------- back-up ---------------- */
 
-    function exportData() {
+    async function exportData() {
         flushEditor();
+        // The file contains everything, also private notes: ask for the Private Note Pass first
+        if (!privatePass && state.notes.some((n) => n.private)) {
+            toast("Set your 'Private Note Pass' in Settings (Top right)", { label: 'Open Settings', onClick: () => openSettings('pass') });
+            return;
+        }
+        if (privatePass) {
+            const pass = await askDialog({
+                title: 'Save .json',
+                message: 'Enter your Private Note Pass to save all your notes as a file.',
+                input: '', password: true, okLabel: 'Save'
+            });
+            $('dialogInput').type = 'text';
+            if (pass === null) return;
+            if (!(await checkPass(pass))) { toast('Wrong pass, the file was not saved'); return; }
+        }
         const payload = {
             app: 'Remindate',
             version: 1,
