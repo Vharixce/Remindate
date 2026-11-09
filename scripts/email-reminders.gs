@@ -187,13 +187,17 @@ function escapeHtml_(t) {
 
 function buildMail_(note, occ) {
   var title = (note.title || '').trim() || 'Untitled note';
-  var text = (note.content || '').trim();
+  // private notes: never put what is inside the note in the email
+  var text = note.private ? '' : (note.content || '').trim();
   if (text.length > 4000) text = text.slice(0, 4000) + '…';
   var extras = [];
-  if (/<img\b/i.test(note.html || '')) extras.push('images');
-  if (/data-voice=/i.test(note.html || '')) extras.push('voice notes');
-  if ((note.strokes || []).length) extras.push('a drawing');
-  var extraLine = extras.length ? 'This note also contains ' + extras.join(', ') + ' – open Remindate to see them.' : '';
+  if (!note.private) {
+    if (/<img\b/i.test(note.html || '')) extras.push('images');
+    if (/data-voice=/i.test(note.html || '')) extras.push('voice notes');
+    if ((note.strokes || []).length) extras.push('a drawing');
+  }
+  var extraLine = note.private ? '🔒 This is a private note – open Remindate and enter your pass to read it.'
+    : extras.length ? 'This note also contains ' + extras.join(', ') + ' – open Remindate to see them.' : '';
   var time = pad_(occ.getHours()) + ':' + pad_(occ.getMinutes());
   var when = WEEKDAYS[occ.getDay()] + ' ' + occ.getDate() + ' ' + MONTHS[occ.getMonth()] + ' ' + occ.getFullYear() + ' at ' + time;
   var repeating = repeatModeOf_(note) !== 'none';

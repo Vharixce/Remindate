@@ -7,6 +7,7 @@
 
     const STORAGE = {
         notes: 'remindate.notes.v1',
+        privatePass: 'remindate.privatePass.v1',
         folders: 'remindate.folders.v1',
         prefs: 'remindate.prefs.v1',
         alarms: 'remindate.alarms.v1',
@@ -150,6 +151,7 @@
         if (typeof note.html !== 'string') note.html = textToHtml(note.content);
         note.gridType = note.gridType || 'square';
         note.grids = note.grids && typeof note.grids === 'object' ? note.grids : {};
+        note.private = !!note.private;
     }
 
     let syncReady = false; // set once the sync code below has loaded
@@ -386,7 +388,7 @@
     }
 
     function noteItemHtml(note) {
-        const preview = note.content.trim()
+        const preview = note.private ? '🔒 Private note' : note.content.trim()
             ? note.content.replace(/\s+/g, ' ').trim().slice(0, 60)
             : (hasImages(note) ? 'Image' : hasVoice(note) ? 'Voice note' : note.strokes.length ? 'Drawing'
                 : Object.values(note.grids || {}).some((g) => g && Object.keys(g).length) ? 'Grid' : 'Empty note');
@@ -837,7 +839,7 @@
             return;
         }
         host.innerHTML = state.trash.map((t) => {
-            const preview = (t.note.content || '').replace(/\s+/g, ' ').trim().slice(0, 70) ||
+            const preview = t.note.private ? '🔒 Private note' : (t.note.content || '').replace(/\s+/g, ' ').trim().slice(0, 70) ||
                 ((t.note.strokes || []).length ? 'Drawing' : 'Empty note');
             return `<div class="trash-item">
                 <div class="trash-text">
@@ -911,6 +913,10 @@
     function renderEditor() {
         const note = noteById(state.currentNoteId);
         const empty = !note;
+        // opening another note locks a private note again
+        if ((note ? note.id : null) !== lastEditorNoteId) unlockedNoteId = null;
+        lastEditorNoteId = note ? note.id : null;
+        if (showPrivateLock(note)) return;
 
         $('noteTitle').disabled = empty;
         editorEl.contentEditable = empty ? 'false' : 'true';
@@ -928,6 +934,7 @@
         drawRedo = [];
 
         if (empty) {
+            updatePrivateBtn(null);
             $('noteTitle').value = '';
             editorEl.innerHTML = '';
             $('noteFolder').innerHTML = folderOptions('');
@@ -938,6 +945,7 @@
         }
 
         $('noteTitle').value = note.title;
+        updatePrivateBtn(note);
         stopVoicePlayback();
         editorEl.innerHTML = sanitizeHtml(note.html);   // (also turns web addresses into links)
         decorateVoiceChips();
@@ -964,6 +972,141 @@
         };
     }
 
+    /* ---------------- private notes ----------------
+     * A private note asks for the "Private Note Pass" every time it is opened.
+     * The pass is kept on this device as a salted hash (never as plain text).
+     * Note: this locks the note in the app; the note itself is not encrypted. */
+    let privatePass = readJSON(STORAGE.privatePass, null);
+    let unlockedNoteId = null;
+    let lastEditorNoteId = null;
+    const isPrivateLocked = (note) => !!(note && note.private && unlockedNoteId !== note.id);
+
+    const toHex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+    async function hashPass(pass, salt, iterations) {
+        if (window.crypto && crypto.subtle) {
+            const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveBits']);
+            const bits = await crypto.subtle.deriveBits(
+                { name: 'PBKDF2', hash: 'SHA-256', salt: new TextEncoder().encode(salt), iterations }, key, 256);
+            return 'pbkdf2:' + toHex(bits);
+        }
+        // very old browsers / file:// without crypto.subtle: a simple repeated hash
+        let h = salt + pass;
+        for (let i = 0; i < 2000; i++) {
+            let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+            for (let j = 0; j < h.length; j++) {
+                const c = h.charCodeAt(j);
+                h1 = Math.imul(h1 ^ c, 2654435761);
+                h2 = Math.imul(h2 ^ c, 1597334677);
+            }
+            h = (h1 >>> 0).toString(16) + (h2 >>> 0).toString(16) + pass;
+        }
+        return 'simple:' + h.slice(0, 16);
+    }
+    async function checkPass(pass) {
+        if (!privatePass) return false;
+        return (await hashPass(pass, privatePass.salt, privatePass.iterations)) === privatePass.hash;
+    }
+    async function setPass(pass) {
+        const salt = toHex(crypto.getRandomValues(new Uint8Array(16)));
+        const iterations = 150000;
+        privatePass = { salt, iterations, hash: await hashPass(pass, salt, iterations) };
+        writeJSON(STORAGE.privatePass, privatePass);
+    }
+
+    // Shows the lock screen for a private note; returns true when the note stays locked
+    function showPrivateLock(note) {
+        const locked = isPrivateLocked(note);
+        const lock = $('privateLock');
+        lock.hidden = !locked;
+        [...$('viewNote').children].forEach((el) => {
+            if (el === lock) return;
+            if (locked) el.setAttribute('inert', ''); else el.removeAttribute('inert');
+        });
+        if (!locked) return false;
+        // keep nothing of the note in the editor while it is locked
+        stopVoicePlayback();
+        editorEl.innerHTML = '';
+        $('noteTitle').value = '';
+        state.draw.strokes = [];
+        drawSel = null;
+        gridHistory = []; gridRedo = []; drawRedo = [];
+        textDirty = false;
+        $('privateLockTitle').textContent = note.title.trim() || 'Untitled';
+        $('privateLockInput').value = '';
+        $('privateLockError').textContent = '';
+        $('privateLockForm').hidden = !privatePass;
+        $('privateLockNoPass').hidden = !!privatePass;
+        if (privatePass && !isMobile()) setTimeout(() => $('privateLockInput').focus(), 30);
+        return true;
+    }
+
+    async function unlockCurrent() {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        const pass = $('privateLockInput').value;
+        if (!pass) { $('privateLockError').textContent = 'Enter your Private Note Pass'; return; }
+        if (await checkPass(pass)) {
+            unlockedNoteId = note.id;
+            renderEditor();
+        } else {
+            $('privateLockError').textContent = 'Wrong pass, try again';
+            $('privateLockInput').select();
+            const box = $('privateLock').querySelector('.private-lock-box');
+            box.classList.remove('shake'); void box.offsetWidth; box.classList.add('shake');
+        }
+    }
+    $('privateLockBtn').addEventListener('click', unlockCurrent);
+    $('privateLockInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); unlockCurrent(); } });
+    $('privateLockNoPass').addEventListener('click', () => openSettings('pass'));
+
+    function updatePrivateBtn(note) {
+        const btn = $('privateBtn');
+        btn.disabled = !note;
+        const on = !!(note && note.private);
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.textContent = on ? '🔒 Private' : '🔓 Make Private';
+        btn.title = on ? 'This note asks for your Private Note Pass. Click to make it normal again.' : 'Ask for a pass every time this note is opened';
+    }
+    $('privateBtn').addEventListener('click', () => {
+        const note = noteById(state.currentNoteId);
+        if (!note || isPrivateLocked(note)) return;
+        if (!note.private && !privatePass) {
+            toast("Set your 'Private Note Pass' in Settings (Top right)", { label: 'Open Settings', onClick: () => openSettings('pass') });
+            return;
+        }
+        flushEditor();
+        note.private = !note.private;
+        if (note.private) unlockedNoteId = note.id; // stays open until you open it again
+        touch(note);
+        updatePrivateBtn(note);
+        renderTree();
+        toast(note.private ? 'Private: this note now asks for your pass when opened' : 'This note is no longer private');
+    });
+
+    // Settings → Private Note Pass
+    function updatePassPanel() {
+        $('passStatus').textContent = privatePass
+            ? 'A pass is set on this device. To change it, enter the current pass first.'
+            : 'No pass yet. Choose a short pass you can remember.';
+        $('passCurrentRow').hidden = !privatePass;
+        ['passCurrent', 'passNew', 'passRepeat'].forEach((id) => { $(id).value = ''; });
+        $('passError').textContent = '';
+        $('passSave').textContent = privatePass ? 'Change pass' : 'Set pass';
+    }
+    $('passSave').addEventListener('click', async () => {
+        const err = $('passError');
+        const next = $('passNew').value;
+        if (privatePass && !(await checkPass($('passCurrent').value))) { err.textContent = 'The current pass is not right'; return; }
+        if (next.length < 3) { err.textContent = 'Use at least 3 characters'; return; }
+        if (next !== $('passRepeat').value) { err.textContent = 'The two new passes are not the same'; return; }
+        await setPass(next);
+        updatePassPanel();
+        toast('Private Note Pass saved');
+        if (isPrivateLocked(noteById(state.currentNoteId))) renderEditor();
+    });
+    $('passRepeat').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('passSave').click(); });
+
     let editorTimer = null;
     function queueSave() {
         clearTimeout(editorTimer);
@@ -973,7 +1116,7 @@
     function flushEditor() {
         clearTimeout(editorTimer);
         const note = noteById(state.currentNoteId);
-        if (!note) return;
+        if (!note || isPrivateLocked(note)) return;
         const title = $('noteTitle').value;
         let html = note.html;
         let content = note.content;
@@ -2469,6 +2612,7 @@
 
     function setTab(tab) {
         flushEditor();
+        if (tab !== 'note' && unlockedNoteId) { unlockedNoteId = null; renderEditor(); }
         state.prefs.activeTab = tab;
         savePrefs();
         $('tabNote').classList.toggle('active', tab === 'note');
@@ -2949,7 +3093,7 @@
 
     function renderNotePicker() {
         const q = $('notePickerSearch').value.trim().toLowerCase();
-        const match = (n) => !q || (n.title || '').toLowerCase().includes(q) || (n.content || '').toLowerCase().includes(q);
+        const match = (n) => !q || (n.title || '').toLowerCase().includes(q) || (!n.private && (n.content || '').toLowerCase().includes(q));
         const groups = [...sortedFolders().map((f) => ({ name: f.name, notes: sortedNotes(state.notes.filter((n) => n.folderId === f.id)) })),
             { name: 'No folder', notes: sortedNotes(state.notes.filter((n) => !n.folderId)) }]
             .map((g) => ({ ...g, notes: g.notes.filter(match) }))
@@ -3503,7 +3647,7 @@
 
     async function addDrawImages(files, at) {
         const note = noteById(state.currentNoteId);
-        if (!note || !files.length) return;
+        if (!note || !files.length || isPrivateLocked(note)) return;
         let added = null;
         for (const [i, file] of files.entries()) {
             let src;
@@ -4383,10 +4527,23 @@
 
     $('toggleSidebarSide').addEventListener('click', toggleSidebarSide);
     // Hamburger button: opens the settings window
-    $('toggleSidebarMain').addEventListener('click', () => {
+    $('toggleSidebarMain').addEventListener('click', () => openSettings());
+    function openSettings(tab) {
         syncHolidayCheckboxes();
+        showSettingsTab(tab || state.settingsTab || 'holidays');
         $('settingsModal').classList.add('active');
-    });
+    }
+    function showSettingsTab(tab) {
+        state.settingsTab = tab;
+        document.querySelectorAll('.settings-tab').forEach((b) => {
+            const on = b.dataset.tab === tab;
+            b.classList.toggle('active', on);
+            b.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+        document.querySelectorAll('[data-settings-panel]').forEach((p) => { p.hidden = p.dataset.settingsPanel !== tab; });
+        if (tab === 'pass') updatePassPanel();
+    }
+    document.querySelectorAll('.settings-tab').forEach((b) => b.addEventListener('click', () => showSettingsTab(b.dataset.tab)));
     $('settingsClose').addEventListener('click', closeModals);
     $('settingsBackdrop').addEventListener('click', closeModals);
 
@@ -5165,7 +5322,7 @@
 
     function showAlarm(note, dueTime, ring = 1, lastRing = false) {
         const title = note.title.trim() || 'Untitled';
-        const body = note.content.trim().slice(0, 120) || 'Scheduled note';
+        const body = note.private ? 'Private note' : (note.content.trim().slice(0, 120) || 'Scheduled note');
         notify(`⏰ ${title}`, body, 'remindate-alarm-' + note.id);
         playAlarmSound();
         const snooze = Math.max(1, Number(note.alarmSnoozeMinutes) || 5);
@@ -5599,7 +5756,8 @@
             const typing = e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]');
             const modalOpen = document.querySelector('.modal.active');
             if ((mode === 'draw' || mode === 'grid') && state.prefs.activeTab !== 'calendar' && !modalOpen
-                && !(typing && typing.offsetParent !== null) && state.currentNoteId) {
+                && !(typing && typing.offsetParent !== null) && state.currentNoteId
+                && !isPrivateLocked(noteById(state.currentNoteId))) {
                 e.preventDefault();
                 if (isUndo) $(mode === 'draw' ? 'toolUndo' : 'gridUndo').click();
                 else if (mode === 'draw') redoDraw();

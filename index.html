@@ -72,9 +72,23 @@
             <div class="content">
                 <!-- Note-editor -->
                 <section class="view" id="viewNote">
+                    <div class="private-lock" id="privateLock" hidden>
+                        <div class="private-lock-box">
+                            <div class="private-lock-icon">🔒</div>
+                            <div class="private-lock-title" id="privateLockTitle"></div>
+                            <div class="private-lock-sub">This note is private.</div>
+                            <div class="private-lock-form" id="privateLockForm">
+                                <input type="password" id="privateLockInput" placeholder="Private Note Pass" autocomplete="off" aria-label="Private Note Pass">
+                                <button class="btn btn-primary" id="privateLockBtn" type="button">Open</button>
+                            </div>
+                            <div class="private-lock-error" id="privateLockError" role="alert"></div>
+                            <button class="link-btn private-lock-nopass" id="privateLockNoPass" type="button" hidden>Set your 'Private Note Pass' in Settings (Top right)</button>
+                        </div>
+                    </div>
                     <div class="editor-header">
                         <input type="text" id="noteTitle" class="title-input" placeholder="Title" autocomplete="off">
                         <div class="editor-actions">
+                            <button class="btn private-btn" id="privateBtn" type="button" aria-pressed="false">🔓 Make Private</button>
                             <button class="btn" id="saveNoteBtn">Save</button>
                             <button class="btn btn-danger" id="deleteNoteBtn">Delete</button>
                         </div>
@@ -525,7 +539,30 @@
                 <div>Settings</div>
                 <button class="icon-btn" id="settingsClose" title="Close">&times;</button>
             </div>
-            <div class="settings-section">
+            <div class="settings-tabs" role="tablist">
+                <button class="settings-tab active" data-tab="holidays" role="tab" type="button">Add Holiday Calendar</button>
+                <button class="settings-tab" data-tab="pass" role="tab" type="button">Private Note Pass</button>
+            </div>
+            <div class="settings-section" data-settings-panel="pass" hidden>
+                <div class="settings-title">Private Note Pass</div>
+                <div class="settings-sub" id="passStatus"></div>
+                <div class="plan-row" id="passCurrentRow">
+                    <label for="passCurrent">Current pass</label>
+                    <input type="password" id="passCurrent" autocomplete="off">
+                </div>
+                <div class="plan-row">
+                    <label for="passNew">New pass</label>
+                    <input type="password" id="passNew" autocomplete="new-password">
+                </div>
+                <div class="plan-row">
+                    <label for="passRepeat">Repeat new pass</label>
+                    <input type="password" id="passRepeat" autocomplete="new-password">
+                </div>
+                <div class="private-lock-error" id="passError" role="alert"></div>
+                <div class="modal-actions"><button class="btn btn-primary" id="passSave" type="button">Set pass</button></div>
+                <div class="settings-sub">Private notes ask for this pass every time you open them. The pass is saved on this device only, so set it on your other devices too. It locks the note in the app; the note itself is not encrypted in your synced file.</div>
+            </div>
+            <div class="settings-section" data-settings-panel="holidays">
                 <div class="settings-title">Holidays in the calendar</div>
                 <div class="settings-sub">Tick the holidays that should show up automatically.</div>
                 <div class="holiday-options" id="holidayOptions"></div>
