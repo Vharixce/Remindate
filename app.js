@@ -20,16 +20,19 @@
 
 
     // [color, name] in display order
+    // colours in the order of the light spectrum (red → violet), then magenta / pink, then the greys
     const PALETTE_NAMED = [
-        ['#000000', 'Black'], ['#4b5563', 'Dark grey'], ['#d1d5db', 'Light grey'], ['#ffffff', 'White'],
-        ['#fca5a5', 'Light red'], ['#ef4444', 'Bright red'], ['#991b1b', 'Dark red'],
+        ['#fca5a5', 'Light red'], ['#e11d1d', 'Bright red'], ['#991b1b', 'Dark red'],
         ['#fdba74', 'Light orange'], ['#f97316', 'Bright orange'], ['#c2410c', 'Dark orange'],
         ['#facc15', 'Yellow'],
         ['#86efac', 'Light green'], ['#22c55e', 'Bright green'], ['#166534', 'Dark green'],
         ['#14b8a6', 'Turquoise'], ['#22d3ee', 'Cyan'],
-        ['#3b82f6', 'Blue'], ['#1e3a8a', 'Dark blue'],
-        ['#c4b5fd', 'Light purple'], ['#8b5cf6', 'Purple'], ['#d946ef', 'Magenta'], ['#6366f1', 'Blue-purple']
+        ['#3b82f6', 'Blue'], ['#1e3a8a', 'Dark blue'], ['#6366f1', 'Blue-purple'],
+        ['#c4b5fd', 'Light purple'], ['#8b5cf6', 'Purple'], ['#d946ef', 'Magenta'], ['#f472b6', 'Pink'],
+        ['#000000', 'Black'], ['#4b5563', 'Dark grey'], ['#d1d5db', 'Light grey'], ['#ffffff', 'White']
     ];
+    const OLD_BRIGHT_RED = '#ef4444'; // the earlier, paler "Bright red"
+    const NEW_BRIGHT_RED = '#e11d1d';
     const PALETTE = PALETTE_NAMED.map(([c]) => c);
     const DEFAULT_PEN_COLOR = '#d1d5db';   // light grey
     const DEFAULT_CANVAS_BG = '#000000';   // black
@@ -126,6 +129,63 @@
         folder.id = folder.id || uid();
         folder.name = folder.name || 'Folder';
         folder.modifiedAt = folder.modifiedAt || '2000-01-01T00:00:00.000Z';
+        folder.parentId = folder.parentId || null; // null = top level
+    }
+
+    // The folder a folder sits in (null = top level). A missing parent or a loop counts as top level.
+    function parentOf(folder) {
+        const pid = folder.parentId;
+        if (!pid) return null;
+        const seen = new Set([folder.id]);
+        let cur = state.folders.find((f) => f.id === pid);
+        if (!cur) return null;
+        let walk = cur;
+        while (walk) {
+            if (seen.has(walk.id)) return null; // loop (e.g. after syncing two devices): show at top level
+            seen.add(walk.id);
+            walk = walk.parentId ? state.folders.find((f) => f.id === walk.parentId) : null;
+        }
+        return cur.id;
+    }
+    const childFolders = (parentId) => sortedFolders().filter((f) => parentOf(f) === (parentId || null));
+    // true if folder `id` is `ancestorId` or somewhere inside it
+    function isInside(id, ancestorId) {
+        let f = state.folders.find((x) => x.id === id);
+        const seen = new Set();
+        while (f && !seen.has(f.id)) {
+            if (f.id === ancestorId) return true;
+            seen.add(f.id);
+            const pid = parentOf(f);
+            f = pid ? state.folders.find((x) => x.id === pid) : null;
+        }
+        return false;
+    }
+    // folders depth-first, with how deep they are
+    function folderTree(parentId = null, depth = 0, out = []) {
+        childFolders(parentId).forEach((f) => { out.push({ folder: f, depth }); folderTree(f.id, depth + 1, out); });
+        return out;
+    }
+    function folderPath(id) {
+        const names = [];
+        let f = state.folders.find((x) => x.id === id);
+        const seen = new Set();
+        while (f && !seen.has(f.id)) {
+            seen.add(f.id);
+            names.unshift(f.name);
+            const pid = parentOf(f);
+            f = pid ? state.folders.find((x) => x.id === pid) : null;
+        }
+        return names.join(' / ');
+    }
+    function expandFolderPath(id) {
+        let f = state.folders.find((x) => x.id === id);
+        const seen = new Set();
+        while (f && !seen.has(f.id)) {
+            seen.add(f.id);
+            if (!state.prefs.expandedFolders.includes(f.id)) state.prefs.expandedFolders.push(f.id);
+            const pid = parentOf(f);
+            f = pid ? state.folders.find((x) => x.id === pid) : null;
+        }
     }
 
     function migrateNote(note) {
@@ -136,6 +196,7 @@
         note.modifiedAt = note.modifiedAt || note.createdAt;
         note.scheduledAt = note.scheduledAt || null;
         note.folderId = note.folderId || null;
+        if (note.color === OLD_BRIGHT_RED) note.color = NEW_BRIGHT_RED;
         note.alarmEnabled = !!note.alarmEnabled;
         note.emailEnabled = !!note.emailEnabled;
         note.emailTo = typeof note.emailTo === 'string' ? note.emailTo : '';
@@ -426,26 +487,27 @@
         treeEl.innerHTML = '';
         const unfiled = sortedNotes(state.notes.filter((n) => !n.folderId));
 
-        sortedFolders().forEach((folder) => {
+        const folderHtml = (folder) => {
             const notes = sortedNotes(state.notes.filter((n) => n.folderId === folder.id));
+            const subs = childFolders(folder.id);
             const expanded = state.prefs.expandedFolders.includes(folder.id);
-            const group = document.createElement('div');
-            group.className = 'folder';
-            group.innerHTML = `
-                <div class="folder-header" data-folder-id="${folder.id}" draggable="true" title="Drag to reorder">
+            const inner = subs.map(folderHtml).join('') + notes.map(noteItemHtml).join('');
+            return `<div class="folder">
+                <div class="folder-header" data-folder-id="${folder.id}" draggable="true" title="Drag to reorder, or onto another folder to put it inside">
                     <span class="folder-chevron">${expanded ? '&#9662;' : '&#9656;'}</span>
                     <span class="folder-name">${escapeHtml(folder.name || 'Folder')}</span>
                     <span class="folder-actions">
+                        <button class="folder-action-btn folder-sub" data-folder-id="${folder.id}" title="New folder inside this folder">+ Folder</button>
                         <button class="folder-action-btn folder-rename" data-folder-id="${folder.id}" title="Rename folder">Rename</button>
                         <button class="folder-action-btn folder-delete" data-folder-id="${folder.id}" title="Delete folder">Delete</button>
                     </span>
                     <button class="more-btn folder-more" data-folder-id="${folder.id}" type="button" title="More" aria-label="More">⋯</button>
                     <button class="folder-add" data-folder-id="${folder.id}" title="New note in this folder">+</button>
                 </div>
-                ${expanded ? `<div class="folder-items">${notes.length ? notes.map(noteItemHtml).join('') : '<div class="folder-empty">Empty</div>'}</div>` : ''}
-            `;
-            treeEl.appendChild(group);
-        });
+                ${expanded ? `<div class="folder-items">${inner || '<div class="folder-empty">Empty</div>'}</div>` : ''}
+            </div>`;
+        };
+        treeEl.innerHTML = childFolders(null).map(folderHtml).join('');
 
         if (unfiled.length) {
             const expanded = state.prefs.expandedFolders.includes('__none');
@@ -484,20 +546,54 @@
         clearTreeDropMarkers();
     });
 
+    // Put a folder before/after another folder (in that folder's parent), or on "No folder" = top level, at the end
     function moveFolderNextTo(folderId, targetId, after) {
         if (folderId === targetId) return;
-        const list = sortedFolders();
-        const folder = list.find((f) => f.id === folderId);
-        if (!folder) return;
-        const rest = list.filter((f) => f.id !== folderId);
-        let index = targetId === '__none' ? rest.length : rest.findIndex((f) => f.id === targetId) + (after ? 1 : 0);
-        if (index < 0) index = rest.length;
-        rest.splice(index, 0, folder);
+        const folder = state.folders.find((f) => f.id === folderId);
+        const target = state.folders.find((f) => f.id === targetId);
+        if (!folder || (target && isInside(target.id, folder.id))) return;
+        const parentId = target ? parentOf(target) : null;
+        const siblings = childFolders(parentId).filter((f) => f.id !== folderId);
+        let index = target ? siblings.indexOf(target) + (after ? 1 : 0) : siblings.length;
+        if (index < 0) index = siblings.length;
+        siblings.splice(index, 0, folder);
         const now = new Date().toISOString();
-        rest.forEach((f, i) => { if (f.order !== i) { f.order = i; f.modifiedAt = now; } });
-        state.folders = rest;
+        if ((folder.parentId || null) !== parentId) { folder.parentId = parentId; folder.modifiedAt = now; }
+        siblings.forEach((f, i) => { if (f.order !== i) { f.order = i; f.modifiedAt = now; } });
         saveFolders();
         renderTree();
+        refreshFolderSelect();
+    }
+
+    // Put a folder inside another folder (as its last sub-folder)
+    function moveFolderInto(folderId, parentId) {
+        const folder = state.folders.find((f) => f.id === folderId);
+        if (!folder || folderId === parentId || isInside(parentId, folderId)) {
+            if (folder && folderId !== parentId) toast("A folder can't go inside one of its own sub-folders");
+            return;
+        }
+        const now = new Date().toISOString();
+        const siblings = childFolders(parentId).filter((f) => f.id !== folderId);
+        folder.parentId = parentId;
+        folder.order = siblings.reduce((m, f) => Math.max(m, typeof f.order === 'number' ? f.order : 0), -1) + 1;
+        folder.modifiedAt = now;
+        expandFolderPath(parentId);
+        savePrefs();
+        saveFolders();
+        renderTree();
+        refreshFolderSelect();
+    }
+    // Phone-friendly: pick where a folder should go
+    function chooseFolderDestination(folder) {
+        const options = folderTree()
+            .filter(({ folder: f }) => !isInside(f.id, folder.id) && f.id !== parentOf(folder))
+            .map(({ folder: f, depth }) => ({ label: `${'\u00a0\u00a0'.repeat(depth)}📁 ${f.name}`, run: () => moveFolderInto(folder.id, f.id) }));
+        if (parentOf(folder)) options.unshift({ label: '⬆ Top level', run: () => moveFolderNextTo(folder.id, '__none') });
+        if (!options.length) { toast('There is no other folder to move it into'); return; }
+        showActionSheet(`Move "${folder.name}" to`, options);
+    }
+    function refreshFolderSelect() {
+        if (state.currentNoteId) $('noteFolder').innerHTML = folderOptions(noteById(state.currentNoteId)?.folderId);
     }
 
     function makeTreeNotesDraggable() {
@@ -523,7 +619,7 @@
     }
 
     function clearTreeDropMarkers() {
-        treeEl.querySelectorAll('.drop-before, .drop-after').forEach((el) => el.classList.remove('drop-before', 'drop-after'));
+        treeEl.querySelectorAll('.drop-before, .drop-after, .drop-inside').forEach((el) => el.classList.remove('drop-before', 'drop-after', 'drop-inside'));
     }
 
     function onTreeNoteDragEnd() {
@@ -573,6 +669,8 @@
             if (!folder) return;
             showActionSheet(folder.name, [
                 { label: 'New note in this folder', run: () => newNote({ folderId: folder.id }) },
+                { label: 'New folder inside', run: () => createFolder(folder.id) },
+                { label: 'Move to…', run: () => chooseFolderDestination(folder) },
                 { label: 'Rename folder', run: () => renameFolder(folder.id) },
                 { label: 'Delete folder', danger: true, run: () => deleteFolder(folder.id) }
             ]);
@@ -600,6 +698,12 @@
         if (add) {
             e.stopPropagation();
             newNote({ folderId: add.dataset.folderId === '__none' ? null : add.dataset.folderId });
+            return;
+        }
+        const sub = e.target.closest('.folder-sub');
+        if (sub) {
+            e.stopPropagation();
+            createFolder(sub.dataset.folderId);
             return;
         }
         const rename = e.target.closest('.folder-rename');
@@ -643,10 +747,16 @@
             if (!target) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = 'move';
-            if (target.dataset.folderId === draggedFolderId) return;
+            const tid = target.dataset.folderId;
+            if (tid === draggedFolderId || (tid !== '__none' && isInside(tid, draggedFolderId))) {
+                e.dataTransfer.dropEffect = 'none';
+                return;
+            }
+            if (tid === '__none') { target.classList.add('drop-before'); return; }
+            // top quarter = before, bottom quarter = after, middle = inside
             const rect = target.getBoundingClientRect();
-            const after = target.dataset.folderId === '__none' ? false : e.clientY > rect.top + rect.height / 2;
-            target.classList.add(after ? 'drop-after' : 'drop-before');
+            const y = (e.clientY - rect.top) / rect.height;
+            target.classList.add(y < 0.25 ? 'drop-before' : y > 0.75 ? 'drop-after' : 'drop-inside');
             return;
         }
         const item = e.target.closest('.note-item');
@@ -676,12 +786,16 @@
         if (draggedFolderId) {
             const target = e.target.closest('.folder-header');
             const after = !!target && target.classList.contains('drop-after');
+            const inside = !!target && target.classList.contains('drop-inside');
             const id = draggedFolderId;
             draggedFolderId = null;
             clearTreeDropMarkers();
             if (!target) return;
             e.preventDefault();
-            moveFolderNextTo(id, target.dataset.folderId, after);
+            if (inside) moveFolderInto(id, target.dataset.folderId);
+            else if (target.classList.contains('drop-before') || after || target.dataset.folderId === '__none') {
+                moveFolderNextTo(id, target.dataset.folderId, after);
+            }
             return;
         }
         const item = e.target.closest('.note-item');
@@ -726,6 +840,7 @@
         const now = new Date().toISOString();
         const folderId = opts.folderId && state.folders.some((f) => f.id === opts.folderId) ? opts.folderId : null;
         state.currentFolderId = folderId;
+        if (folderId) expandFolderPath(folderId);
         const expandId = folderId || '__none';
         if (!state.prefs.expandedFolders.includes(expandId)) state.prefs.expandedFolders.push(expandId);
         state.draw.strokes = [];
@@ -896,8 +1011,8 @@
     }
 
     function folderOptions(selected) {
-        return '<option value="">No folder</option>' + state.folders.map((f) =>
-            `<option value="${f.id}" ${f.id === selected ? 'selected' : ''}>${escapeHtml(f.name)}</option>`
+        return '<option value="">No folder</option>' + folderTree().map(({ folder: f, depth }) =>
+            `<option value="${f.id}" ${f.id === selected ? 'selected' : ''}>${'\u00a0\u00a0\u00a0'.repeat(depth)}${depth ? '↳ ' : ''}${escapeHtml(f.name)}</option>`
         ).join('');
     }
 
@@ -2144,18 +2259,23 @@
 
     /* ---------------- folders ---------------- */
 
-    $('newFolderBtn').addEventListener('click', async () => {
-        const name = await askText('New folder', 'New folder', 'Create');
+    $('newFolderBtn').addEventListener('click', () => createFolder(null));
+
+    async function createFolder(parentId) {
+        const parent = parentId ? state.folders.find((f) => f.id === parentId) : null;
+        const name = await askText(parent ? `New folder in "${parent.name}"` : 'New folder', 'New folder', 'Create');
         if (!name || !name.trim()) return;
-        const folder = { id: uid(), name: name.trim(), modifiedAt: new Date().toISOString(),
-            order: state.folders.reduce((m, f) => Math.max(m, typeof f.order === 'number' ? f.order : 0), -1) + 1 };
+        const pid = parent && state.folders.includes(parent) ? parent.id : null;
+        const folder = { id: uid(), name: name.trim(), modifiedAt: new Date().toISOString(), parentId: pid,
+            order: childFolders(pid).reduce((m, f) => Math.max(m, typeof f.order === 'number' ? f.order : 0), -1) + 1 };
         state.folders.push(folder);
         state.prefs.expandedFolders.push(folder.id);
+        if (pid) expandFolderPath(pid);
         saveFolders();
         savePrefs();
         renderTree();
-        if (state.currentNoteId) $('noteFolder').innerHTML = folderOptions(noteById(state.currentNoteId)?.folderId);
-    });
+        refreshFolderSelect();
+    }
 
     async function renameFolder(id) {
         const folder = state.folders.find((f) => f.id === id);
@@ -2175,14 +2295,19 @@
         flushEditor();
         const folder = state.folders.find((f) => f.id === id);
         if (!folder) return;
-        const ok = await askConfirm('Delete folder', `Delete folder "${folder.name}"? The notes in it are kept and moved to "No folder".`, 'Delete');
+        const parentId = parentOf(folder);
+        const parent = parentId ? state.folders.find((f) => f.id === parentId) : null;
+        const where = parent ? `"${parent.name}"` : '"No folder"';
+        const hasSubs = childFolders(id).length > 0;
+        const ok = await askConfirm('Delete folder', `Delete folder "${folder.name}"? The notes${hasSubs ? ' and folders' : ''} in it are kept and moved to ${where}.`, 'Delete');
         if (!ok || !state.folders.includes(folder)) return;
         const now = new Date().toISOString();
+        childFolders(id).forEach((f) => { f.parentId = parentId; f.modifiedAt = now; });
         state.folders = state.folders.filter((f) => f.id !== id);
         state.deleted.folders[id] = now;
-        state.notes.forEach((n) => { if (n.folderId === id) { n.folderId = null; n.modifiedAt = now; } });
+        state.notes.forEach((n) => { if (n.folderId === id) { n.folderId = parentId; n.modifiedAt = now; } });
         state.prefs.expandedFolders = state.prefs.expandedFolders.filter((f) => f !== id);
-        if (state.currentFolderId === id) state.currentFolderId = null;
+        if (state.currentFolderId === id) state.currentFolderId = parentId;
         saveFolders();
         saveNotes();
         savePrefs();
@@ -2295,8 +2420,9 @@
         renderNoteColors(note);
     }
 
-    const NOTE_COLORS = ['#ef4444', '#f97316', '#facc15', '#22c55e', '#14b8a6', '#22d3ee', '#3b82f6',
-        '#1e3a8a', '#8b5cf6', '#d946ef', '#fca5a5', '#86efac', '#4b5563', '#d1d5db'];
+    // in the order of the light spectrum, then pink, then the greys
+    const NOTE_COLORS = ['#fca5a5', '#e11d1d', '#f97316', '#facc15', '#86efac', '#22c55e', '#14b8a6', '#22d3ee',
+        '#3b82f6', '#1e3a8a', '#8b5cf6', '#d946ef', '#f472b6', '#4b5563', '#d1d5db'];
 
     function renderNoteColors(note) {
         renderColorPicker($('noteColors'), note ? note.color : '', !!note, 'noteColorCustom');
@@ -3521,7 +3647,7 @@
     function renderNotePicker() {
         const q = $('notePickerSearch').value.trim().toLowerCase();
         const match = (n) => !q || (n.title || '').toLowerCase().includes(q) || (!n.private && (n.content || '').toLowerCase().includes(q));
-        const groups = [...sortedFolders().map((f) => ({ name: f.name, notes: sortedNotes(state.notes.filter((n) => n.folderId === f.id)) })),
+        const groups = [...folderTree().map(({ folder: f }) => ({ name: folderPath(f.id), notes: sortedNotes(state.notes.filter((n) => n.folderId === f.id)) })),
             { name: 'No folder', notes: sortedNotes(state.notes.filter((n) => !n.folderId)) }]
             .map((g) => ({ ...g, notes: g.notes.filter(match) }))
             .filter((g) => g.notes.length);
