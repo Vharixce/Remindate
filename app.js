@@ -3438,7 +3438,7 @@
     }
     const zoneHM = (tz, date) => { const p = zoneParts(tz, date); return `${pad2(p.h)}:${pad2(p.min)}`; };
 
-    const RING_R = 53.5; // middle of the 24-hour ring
+    const RING_R = 54.2; // middle of the 24-hour ring (inner edge just outside the 12-hour dial)
 
     // colour the 24-hour ring: light from sunrise to sunset, dark at night (like the clock face)
     function updateRing(card, c, now) {
@@ -3479,13 +3479,13 @@
         let ring = '';
         for (let h = 0; h < 24; h++) {
             const a = h * 15 * DEG;
-            ring += `<line x1="60" y1="1.6" x2="60" y2="4" class="ring-tick" transform="rotate(${h * 15 + 7.5} 60 60)"/>`;
-            ring += `<text x="${(60 + RING_R * Math.sin(a)).toFixed(2)}" y="${(60 - RING_R * Math.cos(a) + 1.6).toFixed(2)}" data-h="${h}">${h || 24}</text>`;
+            ring += `<line x1="60" y1="0.9" x2="60" y2="3.4" class="ring-tick" transform="rotate(${h * 15 + 7.5} 60 60)"/>`;
+            ring += `<text x="${(60 + RING_R * Math.sin(a)).toFixed(2)}" y="${(60 - RING_R * Math.cos(a) + 1.95).toFixed(2)}" data-h="${h}">${h || 24}</text>`;
         }
         return `<svg viewBox="0 0 120 120" class="clock-face" aria-hidden="true">
             <circle cx="60" cy="60" r="${RING_R}" class="ring-night"/>
             <circle cx="60" cy="60" r="${RING_R}" class="ring-day" pathLength="1440" stroke-dasharray="0 1440"/>
-            <circle cx="60" cy="60" r="${RING_R + 4.6}" class="ring-edge"/>
+            <circle cx="60" cy="60" r="${RING_R + 5.2}" class="ring-edge"/>
             <g class="ring-ticks">${ring}</g>
             <g transform="translate(10 10)">
                 <circle cx="50" cy="50" r="47" class="rim"/>
@@ -3495,7 +3495,7 @@
                 <line x1="50" y1="60" x2="50" y2="11" class="hand second"/>
                 <circle cx="50" cy="50" r="2.4" class="pin"/>
             </g>
-            <g class="ring-mark" visibility="hidden"><line x1="60" y1="0.8" x2="60" y2="13.5"/></g>
+            <g class="ring-mark" visibility="hidden"><line x1="60" y1="0.6" x2="60" y2="13.5"/></g>
         </svg>`;
     }
 

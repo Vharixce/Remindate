@@ -1881,10 +1881,10 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 
 /* 24-hour ring */
 .clock-face { width: 172px; height: 172px; }
-.ring-night { fill: none; stroke: #1e1b3a; stroke-width: 9; }
-.ring-day { fill: none; stroke: #f5f5f7; stroke-width: 9; }
+.ring-night { fill: none; stroke: #1e1b3a; stroke-width: 10.35; }
+.ring-day { fill: none; stroke: #f5f5f7; stroke-width: 10.35; }
 .ring-edge { fill: none; stroke: var(--border); stroke-width: .6; }
 .ring-tick { stroke: rgba(127,127,160,.55); stroke-width: .5; }
-.ring-ticks text { font-size: 4.4px; text-anchor: middle; fill: #c7c4f5; font-weight: 600; font-family: inherit; }
+.ring-ticks text { font-size: 5.5px; text-anchor: middle; fill: #c7c4f5; font-weight: 600; font-family: inherit; }
 .ring-ticks text.on-day { fill: #374151; }
 @media (max-width: 760px) { .clock-face { width: 136px; height: 136px; } }
