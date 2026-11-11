@@ -74,7 +74,7 @@
             current: null
         }
     };
-
+//test
     const $ = (id) => document.getElementById(id);
     const isMobile = () => window.matchMedia('(max-width: 760px)').matches;
 
