@@ -3438,6 +3438,32 @@
     }
     const zoneHM = (tz, date) => { const p = zoneParts(tz, date); return `${pad2(p.h)}:${pad2(p.min)}`; };
 
+    const RING_R = 53.5; // middle of the 24-hour ring
+
+    // colour the 24-hour ring: light from sunrise to sunset, dark at night (like the clock face)
+    function updateRing(card, c, now) {
+        const p = zoneParts(c.tz, now);
+        let start = 7 * 60, len = 12 * 60; // without a known place: 07:00–19:00
+        if (c.lat !== null && c.lat !== undefined) {
+            const sun = sunTimes(c.lat, c.lon, p.y, p.m, p.d);
+            if (sun.polar) { start = 0; len = sun.polar === 'day' ? 1440 : 0; }
+            else {
+                const r = zoneParts(c.tz, sun.rise), st = zoneParts(c.tz, sun.set);
+                start = r.h * 60 + r.min;
+                len = ((st.h * 60 + st.min) - start + 1440) % 1440;
+            }
+        }
+        const day = card.querySelector('.ring-day');
+        day.setAttribute('stroke-dasharray', `${len} ${1440 - len + 0.001}`);
+        // a circle starts at 3 o'clock: turn it so the arc starts at sunrise (24 at the top)
+        day.setAttribute('transform', `rotate(${(start / 4 - 90).toFixed(2)} 60 60)`);
+        card.querySelectorAll('.ring-ticks text').forEach((t) => {
+            const m = Number(t.dataset.h) * 60;
+            const isDay = len >= 1440 || ((m - start + 1440) % 1440) < len;
+            t.classList.toggle('on-day', isDay);
+        });
+    }
+
     function clockFaceSvg() {
         let ticks = '';
         for (let i = 0; i < 60; i++) {
@@ -3449,14 +3475,27 @@
             const a = i * 30 * DEG;
             nums += `<text x="${(50 + 30 * Math.sin(a)).toFixed(2)}" y="${(50 - 30 * Math.cos(a) + 3.6).toFixed(2)}">${i}</text>`;
         }
-        return `<svg viewBox="0 0 100 100" class="clock-face" aria-hidden="true">
-            <circle cx="50" cy="50" r="47" class="rim"/>
-            ${ticks}<g class="nums">${nums}</g>
-            <line x1="50" y1="55" x2="50" y2="27" class="hand hour"/>
-            <line x1="50" y1="57" x2="50" y2="15" class="hand minute"/>
-            <line x1="50" y1="60" x2="50" y2="11" class="hand second"/>
-            <g class="mark-hand" visibility="hidden"><line x1="50" y1="50" x2="50" y2="9"/><circle cx="50" cy="9" r="2.2"/></g>
-            <circle cx="50" cy="50" r="2.4" class="pin"/>
+        // 24-hour ring around the clock: 24 (midnight) at the top, 12 (noon) at the bottom
+        let ring = '';
+        for (let h = 0; h < 24; h++) {
+            const a = h * 15 * DEG;
+            ring += `<line x1="60" y1="1.6" x2="60" y2="4" class="ring-tick" transform="rotate(${h * 15 + 7.5} 60 60)"/>`;
+            ring += `<text x="${(60 + RING_R * Math.sin(a)).toFixed(2)}" y="${(60 - RING_R * Math.cos(a) + 1.6).toFixed(2)}" data-h="${h}">${h || 24}</text>`;
+        }
+        return `<svg viewBox="0 0 120 120" class="clock-face" aria-hidden="true">
+            <circle cx="60" cy="60" r="${RING_R}" class="ring-night"/>
+            <circle cx="60" cy="60" r="${RING_R}" class="ring-day" pathLength="1440" stroke-dasharray="0 1440"/>
+            <circle cx="60" cy="60" r="${RING_R + 4.6}" class="ring-edge"/>
+            <g class="ring-ticks">${ring}</g>
+            <g transform="translate(10 10)">
+                <circle cx="50" cy="50" r="47" class="rim"/>
+                ${ticks}<g class="nums">${nums}</g>
+                <line x1="50" y1="55" x2="50" y2="27" class="hand hour"/>
+                <line x1="50" y1="57" x2="50" y2="15" class="hand minute"/>
+                <line x1="50" y1="60" x2="50" y2="11" class="hand second"/>
+                <circle cx="50" cy="50" r="2.4" class="pin"/>
+            </g>
+            <g class="ring-mark" visibility="hidden"><line x1="60" y1="0.8" x2="60" y2="13.5"/></g>
         </svg>`;
     }
 
@@ -3500,7 +3539,7 @@
     function updateClockMarks() {
         document.querySelectorAll('#clockGrid .clock-card[data-clock-id]').forEach((card) => {
             const c = clockInfo(card.dataset.clockId);
-            const hand = card.querySelector('.mark-hand');
+            const hand = card.querySelector('.ring-mark');
             const label = card.querySelector('.clock-mark');
             if (!c || !hand) return;
             if (!clockMark) {
@@ -3511,7 +3550,7 @@
             const p = zoneParts(c.tz, clockMark);
             const night = isNightAt(c, clockMark);
             hand.setAttribute('visibility', 'visible');
-            hand.setAttribute('transform', `rotate(${((p.h % 12) * 30 + p.min * 0.5).toFixed(2)} 50 50)`);
+            hand.setAttribute('transform', `rotate(${((p.h * 60 + p.min) / 4).toFixed(2)} 60 60)`);
             hand.classList.toggle('night', night);
             const today = zoneParts(c.tz, new Date());
             const sameDay = today.y === p.y && today.m === p.m && today.d === p.d;
@@ -3522,20 +3561,20 @@
         });
     }
 
-    // Where on the clock face was clicked → the nearest moment (± 6 h from now) that this clock shows there
+    // Where on the clock was clicked → that time of day on the 24-hour ring (the nearest such moment, ± 12 h from now)
     function markFromPointer(card, e) {
         const face = card.querySelector('.clock-face');
         const r = face.getBoundingClientRect();
         const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
         let deg = Math.atan2(dx, -dy) * 180 / Math.PI;
         if (deg < 0) deg += 360;
-        const dialMin = (Math.round(deg * 2 / 5) * 5) % 720; // 12 hours = 720 minutes, snap to 5 min
+        const dayMin = (Math.round(deg * 4 / 5) * 5) % 1440; // 24 hours = 360°, snap to 5 min
         const c = clockInfo(card.dataset.clockId);
         const now = new Date();
         const p = zoneParts(c.tz, now);
-        let delta = dialMin - ((p.h % 12) * 60 + p.min);
-        if (delta > 360) delta -= 720;
-        if (delta <= -360) delta += 720;
+        let delta = dayMin - (p.h * 60 + p.min);
+        if (delta > 720) delta -= 1440;
+        if (delta <= -720) delta += 1440;
         clockMark = new Date(now.getTime() - p.s * 1000 - now.getMilliseconds() + delta * 60000);
         updateClockMarks();
     }
@@ -3589,6 +3628,7 @@
                 }
             }
             card.querySelector('.clock-sun').textContent = sunText;
+            updateRing(card, c, now);
             card.querySelector('.clock-sun').title = sunText ? 'Sunrise · sunset today (local time there)' : '';
             card.classList.toggle('night', !isDay);
         });
