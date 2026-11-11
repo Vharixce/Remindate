@@ -166,7 +166,7 @@
                             <button class="tool-btn" id="toolSelect" title="Select: drag a box around parts of the drawing, then move, copy (Ctrl+C / Ctrl+D) or delete them">⬚</button>
                             <button class="tool-btn active" id="toolPen" title="Pen">✎</button>
                             <button class="tool-btn" id="toolEraser" title="Eraser">⌫</button>
-                            <button class="tool-btn" id="toolFill" title="Fill canvas">▦</button>
+                            <button class="tool-btn" id="toolFill" title="Fill canvas with the current colour">▦</button>
                             <button class="tool-btn" id="toolImage" title="Add a picture (or paste one with Ctrl+V)">🖼</button>
                             <input type="file" id="drawImageFile" accept="image/*" multiple hidden>
                             <button class="tool-btn" id="toolUndo" title="Undo">↶</button>
@@ -208,6 +208,7 @@
                     <div class="card draw-toolbar" id="gridToolbar" style="display:none;">
                         <div class="draw-tools">
                             <button class="swatch" id="gridColorSwatch" title="Color"></button>
+                            <button class="tool-btn" id="gridSelect" title="Select: drag a box around coloured cells, then move, copy (Ctrl+D or Alt+drag) or delete them">⬚</button>
                             <button class="tool-btn active" id="gridPen" title="Fill cells">✎</button>
                             <button class="tool-btn" id="gridEraser" title="Erase cells">⌫</button>
                             <select id="gridType" class="folder-select grid-type" title="Grid shape">
@@ -225,6 +226,11 @@
                             <button class="tool-btn" id="gridUndo" title="Undo">↶</button>
                             <button class="tool-btn" id="gridClear" title="Clear grid">✕</button>
                             <button class="tool-btn" id="gridBg" title="Background">◧</button>
+                            <span class="pick-actions" id="gridPickActions" hidden>
+                                <span class="pick-count" id="gridPickCount"></span>
+                                <button class="tool-btn pick-btn" id="gridPickCopy" type="button" title="Make a copy, then drag it (Ctrl+D)">⧉ Copy</button>
+                                <button class="tool-btn pick-btn danger" id="gridPickDelete" type="button" title="Delete (Delete key)">🗑 Delete</button>
+                            </span>
                         </div>
                     </div>
 

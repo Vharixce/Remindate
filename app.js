@@ -1170,6 +1170,8 @@
         drawRedo = [];
         drawUndo = [];
         drawPick = [];
+        gridPick = [];
+        gridCopyMode = false;
 
         if (empty) {
             updatePrivateBtn(null);
@@ -1806,6 +1808,18 @@
         textDirty = true;
         flushEditor();
     }
+
+    // Ctrl+C on a clicked picture copies the picture (also when no text is selected)
+    editorEl.addEventListener('copy', (e) => {
+        if (!selectedImg || !editorEl.contains(selectedImg) || !e.clipboardData) return;
+        const sel = window.getSelection();
+        if (sel && !sel.isCollapsed && sel.toString().trim()) return; // copying text: normal copy
+        e.preventDefault();
+        const src = selectedImg.getAttribute('src') || '';
+        e.clipboardData.setData('text/html', `<img src="${src.replace(/"/g, '&quot;')}">`);
+        e.clipboardData.setData('text/plain', '');
+        toast('Picture copied — paste it with Ctrl+V (also in the drawing)');
+    });
 
     editorEl.addEventListener('paste', (e) => {
         const dt = e.clipboardData;
@@ -4739,6 +4753,17 @@
         if (typing && typing.offsetParent !== null) return;
         const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => f.type.startsWith('image/'));
         if (!files.length) {
+            // a picture copied from the text part of a note (or from a web page)
+            const html = e.clipboardData ? e.clipboardData.getData('text/html') : '';
+            const m = html && /<img[^>]+src="(data:image\/[^"]+)"/i.exec(html);
+            if (m && !isPrivateLocked(noteById(state.currentNoteId))) {
+                e.preventDefault();
+                fetch(m[1].replace(/&quot;/g, '"')).then((r) => r.blob()).then((blob) => {
+                    const type = blob.type || 'image/png';
+                    addDrawImages([new File([blob], `picture.${type.split('/')[1] || 'png'}`, { type })]);
+                }).catch(() => toast('Could not paste that picture'));
+                return;
+            }
             // pieces copied with the select tool
             const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
             if (drawClipboard && text === COPY_MARK && !isPrivateLocked(noteById(state.currentNoteId))) {
@@ -4907,7 +4932,20 @@
     $('pickCopy').addEventListener('click', () => duplicatePick());
     $('pickDelete').addEventListener('click', () => deletePick());
     $('toolEraser').addEventListener('click', () => setTool('eraser'));
-    $('toolFill').addEventListener('click', () => setTool('fill'));
+    // Fill canvas: colour the whole background with the current colour right away
+    $('toolFill').addEventListener('click', () => {
+        const note = noteById(state.currentNoteId);
+        if (!note || isPrivateLocked(note)) return;
+        if ((note.canvasBackground || DEFAULT_CANVAS_BG) === state.draw.color) return;
+        pushDrawUndo();
+        note.canvasBackground = state.draw.color;
+        touch(note);
+        renderStrokes();
+        renderGrid();
+        const btn = $('toolFill');
+        btn.classList.add('flash');
+        setTimeout(() => btn.classList.remove('flash'), 250);
+    });
 
     $('toolUndo').addEventListener('click', () => {
         let prev = drawUndo.pop();
@@ -4916,8 +4954,8 @@
             if (!state.draw.strokes.length) return;
             prev = state.draw.strokes.slice(0, -1);
         }
-        drawRedo.push(state.draw.strokes);
-        state.draw.strokes = prev;
+        drawRedo.push(drawSnapshot());
+        restoreDrawSnapshot(prev);
         drawSel = null;
         renderStrokes();
         flushEditor();
@@ -4927,8 +4965,8 @@
     function redoDraw() {
         const next = drawRedo.pop();
         if (!next) return;
-        drawUndo.push(state.draw.strokes);
-        state.draw.strokes = next;
+        drawUndo.push(drawSnapshot());
+        restoreDrawSnapshot(next);
         drawSel = null;
         renderStrokes();
         flushEditor();
@@ -4989,10 +5027,24 @@
     let drawRedo = [];       // drawing versions that Ctrl+Y can bring back
     let drawUndo = [];       // earlier versions of the drawing (lists of items) for Ctrl+Z
     // Call before every change to the drawing: remembers the drawing as it is now
+    function drawSnapshot() {
+        const snap = state.draw.strokes.slice();
+        const note = noteById(state.currentNoteId);
+        snap.bg = note ? note.canvasBackground : undefined; // the canvas colour is part of the version too
+        return snap;
+    }
     function pushDrawUndo() {
-        drawUndo.push(state.draw.strokes.slice());
+        drawUndo.push(drawSnapshot());
         if (drawUndo.length > 100) drawUndo.shift();
         drawRedo = [];
+    }
+    function restoreDrawSnapshot(snap) {
+        state.draw.strokes = snap.slice();
+        const note = noteById(state.currentNoteId);
+        if (note && 'bg' in snap && (note.canvasBackground || undefined) !== (snap.bg || undefined)) {
+            if (snap.bg) note.canvasBackground = snap.bg; else delete note.canvasBackground;
+            touch(note);
+        }
     }
     let gridHistory = [];    // undo steps for the open note
     let gridRedo = [];       // undone steps that Ctrl+Y can redo
@@ -5193,6 +5245,7 @@
             for (let j = i; j < Math.min(i + 100, list.length); j++) tracePoly(list[j], v);
             g.stroke();
         }
+        drawGridPickOverlay(v);
     }
 
     function renderGrid() {
@@ -5298,11 +5351,13 @@
         e.preventDefault();
         try { gridCanvas.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
         const pos = gridPos(e);
+        if (gridTool === 'select') { startGridPick(note, pos, e.altKey); return; }
         gridStroke = { changes: new Map(), last: pos, type: gridKey(note) };
         gridPaintAt(note, pos);
     });
 
     gridCanvas.addEventListener('pointermove', (e) => {
+        if (gridTool === 'select') { moveGridPick(e); return; }
         if (!gridStroke) return;
         e.preventDefault();
         const note = noteById(state.currentNoteId);
@@ -5318,6 +5373,7 @@
     });
 
     function endGridStroke() {
+        if (gridPickDrag || gridMarquee) { endGridPick(); return; }
         if (!gridStroke) return;
         const stroke = gridStroke;
         gridStroke = null;
@@ -5354,12 +5410,250 @@
 
     function setGridTool(tool) {
         gridTool = tool;
+        if (tool !== 'select' && (gridPick.length || gridCopyMode)) { gridPick = []; gridCopyMode = false; renderGrid(); }
         $('gridPen').classList.toggle('active', tool === 'pen');
         $('gridEraser').classList.toggle('active', tool === 'eraser');
-        gridCanvas.style.cursor = tool === 'eraser' ? 'cell' : 'crosshair';
+        $('gridSelect').classList.toggle('active', tool === 'select');
+        gridCanvas.style.cursor = tool === 'eraser' ? 'cell' : tool === 'select' ? 'default' : 'crosshair';
+        updateGridPickBar();
     }
 
+    /* ---------- select tool in the grid: pick filled cells, move / copy / delete them ---------- */
+    let gridPick = [];        // ids of the selected cells
+    let gridMarquee = null;   // { a, b } while dragging a selection box
+    let gridPickDrag = null;  // while moving the selection
+    let gridCopyMode = false; // the next move leaves the originals where they are (a copy)
+    let gridClipboard = null; // { key, cells: [[id, colour]] }
+    const GRID_COPY_MARK = '[Remindate grid selection]';
+    const cellCenter = (c) => {
+        let x = 0, y = 0;
+        c.pts.forEach(([px, py]) => { x += px; y += py; });
+        return { x: x / c.pts.length, y: y / c.pts.length };
+    };
+    // same kind of cell (triangles up/down, octagon vs small square), so a move keeps the pattern
+    const cellKind = (c) => `${c.pts.length}:${Math.round(Math.atan2(c.pts[1][1] - c.pts[0][1], c.pts[1][0] - c.pts[0][0]) * 100)}`;
+
+    function updateGridPickBar() {
+        const show = gridTool === 'select' && gridPick.length > 0;
+        $('gridPickActions').hidden = !show;
+        if (show) $('gridPickCount').textContent = `${gridPick.length} cell${gridPick.length === 1 ? '' : 's'}${gridCopyMode ? ' · copy' : ''}`;
+    }
+
+    // outline of the selected cells and the selection box (drawn on top of the grid)
+    function drawGridPickOverlay(v) {
+        if (!gridPick.length && !gridMarquee) return;
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        const grid = gridOf(note);
+        const { g } = v;
+        const px = Math.max(1, v.sx / 800);
+        g.save();
+        g.setLineDash([5 * px, 3 * px]);
+        g.lineWidth = 2 * px;
+        g.strokeStyle = '#a78bfa';
+        g.fillStyle = 'rgba(167,139,250,.18)';
+        gridPick.forEach((id) => {
+            const c = grid.byId.get(id);
+            if (!c) return;
+            g.beginPath();
+            tracePoly(c, v);
+            g.fill();
+            g.stroke();
+        });
+        if (gridMarquee) {
+            const { a, b } = gridMarquee;
+            g.strokeStyle = '#c4b5fd';
+            g.fillStyle = 'rgba(196,181,253,.12)';
+            const x = v.ox + Math.min(a.x, b.x) * v.sx, y = v.oy + Math.min(a.y, b.y) * v.sy;
+            g.fillRect(x, y, Math.abs(b.x - a.x) * v.sx, Math.abs(b.y - a.y) * v.sy);
+            g.strokeRect(x, y, Math.abs(b.x - a.x) * v.sx, Math.abs(b.y - a.y) * v.sy);
+        }
+        g.restore();
+    }
+
+    function startGridPick(note, pos, alt) {
+        const grid = gridOf(note);
+        const cells = gridCellsOf(note);
+        const hit = gridHit(grid, pos.x, pos.y);
+        if (hit && gridPick.includes(hit.id)) {
+            // drag the selection (with Alt, or after "Copy": leave the originals)
+            gridPickDrag = {
+                key: gridKey(note), anchor: hit, base: { ...cells }, moved: false, copy: gridCopyMode || alt,
+                colors: gridPick.map((id) => [id, cells[id]]), targets: gridPick.slice()
+            };
+            gridCanvas.style.cursor = 'move';
+            return;
+        }
+        if (hit && cells[hit.id]) {
+            // press on a filled cell: select it and move it right away
+            gridPick = [hit.id];
+            gridCopyMode = false;
+            gridPickDrag = { key: gridKey(note), anchor: hit, base: { ...cells }, moved: false, copy: alt,
+                colors: [[hit.id, cells[hit.id]]], targets: [hit.id] };
+            renderGrid();
+            updateGridPickBar();
+            return;
+        }
+        gridPick = [];
+        gridCopyMode = false;
+        gridMarquee = { a: pos, b: pos };
+        renderGrid();
+        updateGridPickBar();
+    }
+
+    function moveGridPick(e) {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        const pos = gridPos(e);
+        const grid = gridOf(note);
+        if (gridPickDrag) {
+            e.preventDefault();
+            const d = gridPickDrag;
+            const over = gridHit(grid, pos.x, pos.y);
+            if (!over || cellKind(over) !== cellKind(d.anchor)) return; // wait for a matching cell
+            const a = cellCenter(d.anchor), o = cellCenter(over);
+            const dx = o.x - a.x, dy = o.y - a.y;
+            const targets = [];
+            const cells = { ...d.base };
+            if (!d.copy) d.colors.forEach(([id]) => { delete cells[id]; });
+            for (const [id, color] of d.colors) {
+                const c = grid.byId.get(id);
+                if (!c) continue;
+                const cc = cellCenter(c);
+                const t = gridHit(grid, cc.x + dx, cc.y + dy);
+                if (!t) continue; // moved off the grid
+                cells[t.id] = color;
+                targets.push(t.id);
+            }
+            d.moved = over.id !== d.anchor.id;
+            d.targets = targets;
+            note.grids[d.key] = cells;
+            gridPick = targets;
+            renderGrid();
+            return;
+        }
+        if (gridMarquee) {
+            e.preventDefault();
+            gridMarquee.b = pos;
+            renderGrid();
+            return;
+        }
+        const hit = gridHit(grid, pos.x, pos.y);
+        gridCanvas.style.cursor = hit && (gridPick.includes(hit.id) || gridCellsOf(note)[hit.id]) ? 'move' : 'default';
+    }
+
+    // record the change between two versions of the cells as one undo step
+    function commitGridChange(note, key, before) {
+        const after = note.grids[key] || {};
+        const changes = new Map();
+        new Set([...Object.keys(before), ...Object.keys(after)]).forEach((id) => {
+            if (before[id] !== after[id]) changes.set(id, before[id]);
+        });
+        if (!changes.size) return false;
+        gridHistory.push({ changes, type: key });
+        gridRedo = [];
+        if (gridHistory.length > 100) gridHistory.shift();
+        touch(note);
+        return true;
+    }
+
+    function endGridPick() {
+        const note = noteById(state.currentNoteId);
+        if (gridPickDrag) {
+            const d = gridPickDrag;
+            gridPickDrag = null;
+            if (note && d.moved) {
+                commitGridChange(note, d.key, d.base);
+                gridCopyMode = false;
+            } else if (note) {
+                note.grids[d.key] = d.base;
+                gridPick = d.colors.map(([id]) => id);
+            }
+            renderGrid();
+            updateGridPickBar();
+            return;
+        }
+        const { a, b } = gridMarquee;
+        gridMarquee = null;
+        if (note) {
+            const x0 = Math.min(a.x, b.x), x1 = Math.max(a.x, b.x), y0 = Math.min(a.y, b.y), y1 = Math.max(a.y, b.y);
+            const grid = gridOf(note);
+            const cells = gridCellsOf(note);
+            // every filled cell whose middle is inside the box
+            gridPick = grid.cells.filter((c) => {
+                if (!cells[c.id]) return false;
+                const m = cellCenter(c);
+                return m.x >= x0 && m.x <= x1 && m.y >= y0 && m.y <= y1;
+            }).map((c) => c.id);
+        }
+        renderGrid();
+        updateGridPickBar();
+    }
+
+    function deleteGridPick() {
+        const note = noteById(state.currentNoteId);
+        if (!note || !gridPick.length) return false;
+        const key = gridKey(note);
+        const before = { ...gridCellsOf(note) };
+        const cells = { ...before };
+        gridPick.forEach((id) => { delete cells[id]; });
+        note.grids[key] = cells;
+        commitGridChange(note, key, before);
+        gridPick = [];
+        gridCopyMode = false;
+        renderGrid();
+        updateGridPickBar();
+        return true;
+    }
+    function copyGridPick() {
+        if (!gridPick.length) return;
+        gridCopyMode = true;
+        updateGridPickBar();
+        toast('Copy made — drag it to where you want it');
+    }
+    function gridPickActive() {
+        if (state.prefs.mode !== 'grid' || state.prefs.activeTab === 'calendar' || !state.currentNoteId) return false;
+        if (document.querySelector('.modal.active')) return false;
+        const t = document.activeElement && document.activeElement.closest && document.activeElement.closest('input, textarea, select, [contenteditable="true"]');
+        return !(t && t.offsetParent !== null);
+    }
+    ['copy', 'cut'].forEach((type) => document.addEventListener(type, (e) => {
+        if (!gridPickActive() || gridTool !== 'select' || !gridPick.length) return;
+        const note = noteById(state.currentNoteId);
+        e.preventDefault();
+        const cells = gridCellsOf(note);
+        gridClipboard = { key: gridKey(note), cells: gridPick.map((id) => [id, cells[id]]).filter(([, c]) => c) };
+        if (e.clipboardData) e.clipboardData.setData('text/plain', GRID_COPY_MARK);
+        if (type === 'cut') deleteGridPick();
+        else toast('Copied — press Ctrl+V, then drag the copy to where you want it');
+    }));
+    document.addEventListener('paste', (e) => {
+        if (!gridPickActive() || !gridClipboard) return;
+        const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+        if (text !== GRID_COPY_MARK) return;
+        const note = noteById(state.currentNoteId);
+        if (!note || isPrivateLocked(note)) return;
+        e.preventDefault();
+        if (gridClipboard.key !== gridKey(note)) { toast('That was copied from another grid shape, size or angle'); return; }
+        // put the copied colours back on their cells, selected and ready to be dragged away
+        const key = gridKey(note);
+        const before = { ...gridCellsOf(note) };
+        const cells = { ...before };
+        gridClipboard.cells.forEach(([id, c]) => { cells[id] = c; });
+        note.grids[key] = cells;
+        commitGridChange(note, key, before);
+        gridPick = gridClipboard.cells.map(([id]) => id);
+        gridCopyMode = true;
+        if (gridTool !== 'select') setGridTool('select');
+        renderGrid();
+        updateGridPickBar();
+        toast('Pasted — drag it to where you want it');
+    });
+
     $('gridPen').addEventListener('click', () => setGridTool('pen'));
+    $('gridSelect').addEventListener('click', () => setGridTool('select'));
+    $('gridPickCopy').addEventListener('click', copyGridPick);
+    $('gridPickDelete').addEventListener('click', deleteGridPick);
     $('gridEraser').addEventListener('click', () => setGridTool('eraser'));
     $('gridColorSwatch').addEventListener('click', () => openModal('colorModal'));
     $('gridBg').addEventListener('click', () => $('toolCanvasBg').click());
@@ -5368,6 +5662,7 @@
         const note = noteById(state.currentNoteId);
         if (!note) return;
         note.gridType = $('gridType').value;
+        gridPick = []; gridCopyMode = false;
         gridHistory = [];
         gridRedo = [];
         updateGridControls(note);
@@ -5386,6 +5681,7 @@
         const note = noteById(state.currentNoteId);
         if (!note) return;
         note.gridSize = $('gridSize').value;
+        gridPick = []; gridCopyMode = false;
         gridHistory = [];
         gridRedo = [];
         updateGridControls(note);
@@ -5398,6 +5694,7 @@
         if (!note) return;
         const g = gridSettings(note);
         note.gridRotation = (g.rot + GRID_STEP[g.type]) % GRID_PERIOD[g.type];
+        gridPick = []; gridCopyMode = false;
         gridHistory = [];
         gridRedo = [];
         updateGridControls(note);
@@ -5411,6 +5708,7 @@
         if (!note || !stroke) return;
         revertGridChanges(note, stroke);
         gridRedo.push(stroke);
+        gridPick = []; gridCopyMode = false; updateGridPickBar();
         touch(note);
         renderGrid();
     });
@@ -5573,6 +5871,14 @@
         renderStrokes();
         renderGrid();
     });
+
+    // the Text / Draw / Grid bar sticks to the top; the toolbars stick just below it
+    function measureModeBar() {
+        const bar = document.querySelector('#viewNote .editor-toolbar');
+        if (bar && bar.offsetHeight) document.documentElement.style.setProperty('--modebar-h', `${bar.offsetHeight}px`);
+    }
+    window.addEventListener('resize', measureModeBar);
+    setTimeout(measureModeBar, 0);
 
     /* ---------------- zijbalk-layout ---------------- */
 
@@ -6854,6 +7160,11 @@
                 else if (mode === 'draw') redoDraw();
                 else redoGrid();
             }
+        }
+        if (gridTool === 'select' && (gridPick.length || gridCopyMode) && gridPickActive()) {
+            if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteGridPick(); return; }
+            if (e.key === 'Escape') { gridPick = []; gridCopyMode = false; renderGrid(); updateGridPickBar(); return; }
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') { e.preventDefault(); copyGridPick(); return; }
         }
         if (drawPick.length && state.draw.tool === 'select' && drawPickActive()) {
             if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deletePick(); return; }

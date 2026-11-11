@@ -1898,3 +1898,15 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 
 /* the main screen uses 95% of the width on a computer */
 @media (min-width: 761px) { .view { max-width: max(95%, 1200px); } }
+
+/* the Text / Draw / Grid bar moves along at the top; the toolbars stay right below it */
+#viewNote .editor-toolbar {
+    position: sticky; top: -16px; z-index: 32;
+    background: var(--bg); padding: 6px 0; margin: -6px 0;
+}
+#textToolbar, #drawToolbar, #gridToolbar { top: calc(var(--modebar-h, 48px) - 16px); }
+@media (max-width: 760px) {
+    #viewNote .editor-toolbar { top: -12px; }
+    #textToolbar, #drawToolbar, #gridToolbar { top: calc(var(--modebar-h, 48px) - 12px); }
+}
+.tool-btn.flash { background: rgba(124,111,240,.35); border-color: var(--primary); }
