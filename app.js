@@ -1892,22 +1892,33 @@
     }
     // a line with only pictures in it (pictures can stand side by side there)
     function isPictureLine(n) {
-        return !!n && n.nodeType === 1 && n.nodeName === 'DIV' && !!n.querySelector(':scope > img')
+        return !!n && n.nodeType === 1 && (n.nodeName === 'DIV' || n.nodeName === 'P') && !!n.querySelector(':scope > img')
             && [...n.childNodes].every((c) => c.nodeName === 'IMG' || c.nodeName === 'BR' || (c.nodeType === 3 && !c.textContent.trim()));
     }
-    // Over a picture line: next to a picture in that line (left or right of it, by the pointer)
+    // all picture lines (also ones nested in another line), after giving loose pictures a line of their own
+    function pictureLines() {
+        [...editorEl.childNodes].forEach((n) => {
+            if (n.nodeName !== 'IMG') return;
+            const line = document.createElement('div');
+            editorEl.insertBefore(line, n);
+            line.appendChild(n);
+        });
+        return [...editorEl.querySelectorAll('div, p')].filter(isPictureLine);
+    }
+    // Pointer at the height of a picture line (anywhere left/right): next to the pictures on it
     function sideBySidePoint(x, y) {
-        for (const b of textBlocks()) {
-            if (y < b.rect.top || y > b.rect.bottom || !isPictureLine(b.node)) continue;
-            const imgs = [...b.node.querySelectorAll(':scope > img')];
+        for (const line of pictureLines()) {
+            const imgs = [...line.querySelectorAll(':scope > img')];
             const rects = imgs.map((i) => i.getBoundingClientRect());
+            const top = Math.min(...rects.map((r) => r.top)), bottom = Math.max(...rects.map((r) => r.bottom));
+            if (y < top - 4 || y > bottom + 4) continue;
+            // the picture whose middle is right of the pointer: the new one goes before it; else at the end
+            const i = rects.findIndex((r) => y >= r.top - 4 && y <= r.bottom + 4 && x < r.left + r.width / 2);
             const last = rects[rects.length - 1];
-            // only when the pointer is on (or just right of) the pictures, not far away in the empty part
-            if (x > last.right + last.width * 0.6) return null;
-            const i = rects.findIndex((r) => x < r.left + r.width / 2);
             return {
-                inline: true, line: b.node, beforeImg: i < 0 ? null : imgs[i],
-                x: i < 0 ? last.right + 6 : rects[i].left - 3, y: b.rect.top, h: Math.max(...rects.map((r) => r.height))
+                inline: true, line, beforeImg: i < 0 ? null : imgs[i],
+                x: i < 0 ? last.right + 6 : rects[i].left - 6, y: i < 0 ? last.top : rects[i].top,
+                h: i < 0 ? last.height : rects[i].height, end: i < 0
             };
         }
         return null;
@@ -2020,11 +2031,17 @@
         const width = (er.width - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0)) * (widthPct || 25) / 100;
         const height = Math.max(24, width * (aspect || 0.66));
         dropOutline.classList.toggle('inline', !!point.inline);
-        if (point.inline) {
-            // a thin box next to the picture: "it goes here, on the same line"
+        if (point.inline && point.end) {
+            // the picture's own size, right next to the last picture on that line
+            dropOutline.style.left = `${point.x}px`;
+            dropOutline.style.top = `${point.y + Math.max(0, (point.h || height) - height)}px`;
+            dropOutline.style.width = `${width}px`;
+            dropOutline.style.height = `${height}px`;
+        } else if (point.inline) {
+            // between two pictures: a bar where it slides in
             dropOutline.style.left = `${point.x - 3}px`;
             dropOutline.style.top = `${point.y}px`;
-            dropOutline.style.width = `${Math.min(width, 40)}px`;
+            dropOutline.style.width = '8px';
             dropOutline.style.height = `${point.h || height}px`;
         } else {
             dropOutline.style.left = `${left}px`;
@@ -2110,7 +2127,8 @@
             if (!editorEl.contains(img)) return;
             const point = dropTarget(e.clientX, e.clientY);
             if (point.inline) {
-                if (point.beforeImg === img || (point.line === img.parentNode && point.beforeImg === img.nextSibling)) return; // same place
+                if (point.beforeImg === img || (point.line === img.parentNode && (point.beforeImg === img.nextSibling
+                    || (!point.beforeImg && !img.nextElementSibling)))) return; // same place
                 recordText();
                 placeInline(img, point);
                 selectImage(img);
