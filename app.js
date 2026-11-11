@@ -188,6 +188,8 @@
         }
     }
 
+    // the pastel colours became 10% less white: update text that used the old ones
+    const OLD_PASTELS = [[/#ffadad|rgb\(255,\s*173,\s*173\)/gi, '#ff9494'], [/#ffd6a5|rgb\(255,\s*214,\s*165\)/gi, '#ffca8c'], [/#fdffb6|rgb\(253,\s*255,\s*182\)/gi, '#fcff9c'], [/#caffbf|rgb\(202,\s*255,\s*191\)/gi, '#b5ffa6'], [/#a0c4ff|rgb\(160,\s*196,\s*255\)/gi, '#86b4ff'], [/#d4b5ff|rgb\(212,\s*181,\s*255\)/gi, '#c59cff']];
     function migrateNote(note) {
         note.id = note.id || uid();
         note.title = note.title || '';
@@ -197,6 +199,9 @@
         note.scheduledAt = note.scheduledAt || null;
         note.folderId = note.folderId || null;
         if (note.color === OLD_BRIGHT_RED) note.color = NEW_BRIGHT_RED;
+        if (typeof note.html === 'string' && /#(ffadad|ffd6a5|fdffb6|caffbf|a0c4ff|d4b5ff)|rgb\(\s*(255,\s*173|255,\s*214|253,\s*255|202,\s*255|160,\s*196|212,\s*181)/i.test(note.html)) {
+            OLD_PASTELS.forEach(([re, color]) => { note.html = note.html.replace(re, color); });
+        }
         note.alarmEnabled = !!note.alarmEnabled;
         note.emailEnabled = !!note.emailEnabled;
         note.emailTo = typeof note.emailTo === 'string' ? note.emailTo : '';
@@ -460,12 +465,9 @@
                 ? ` · ↻ ${next ? formatDateTime(toLocalIso(next)) : 'ended'}`
                 : ` · ${formatDateTime(note.scheduledAt)}`;
         }
-        return `<div class="note-item ${note.id === state.currentNoteId ? 'active' : ''}" data-note-id="${note.id}">
-            <button class="more-btn note-more" data-note-id="${note.id}" type="button" title="More" aria-label="More">⋯</button>
-            <span class="item-actions">
-                <button class="folder-action-btn note-rename" data-note-id="${note.id}" title="Rename note">Rename</button>
-                <button class="folder-action-btn folder-delete note-delete" data-note-id="${note.id}" title="Delete note">Delete</button>
-            </span>
+        const bg = note.bgColor ? ` style="${bgStyle(note.bgColor)}"` : '';
+        return `<div class="note-item ${note.id === state.currentNoteId ? 'active' : ''}${note.bgColor ? ' has-bg' : ''}" data-note-id="${note.id}"${bg}>
+            <button class="more-btn tree-menu-btn note-more" data-note-id="${note.id}" type="button" title="Menu" aria-label="Menu" aria-haspopup="menu">☰</button>
             <div class="note-item-title">${escapeHtml(note.title.trim() || 'Untitled')}</div>
             <div class="note-item-meta">${escapeHtml(preview)}${meta}</div>
         </div>`;
@@ -493,15 +495,10 @@
             const expanded = state.prefs.expandedFolders.includes(folder.id);
             const inner = subs.map(folderHtml).join('') + notes.map(noteItemHtml).join('');
             return `<div class="folder">
-                <div class="folder-header" data-folder-id="${folder.id}" draggable="true" title="Drag to reorder, or onto another folder to put it inside">
+                <div class="folder-header${folder.bgColor ? ' has-bg' : ''}" data-folder-id="${folder.id}" draggable="true" title="Drag to reorder, or onto another folder to put it inside"${folder.bgColor ? ` style="${bgStyle(folder.bgColor)}"` : ''}>
                     <span class="folder-chevron">${expanded ? '&#9662;' : '&#9656;'}</span>
                     <span class="folder-name">${escapeHtml(folder.name || 'Folder')}</span>
-                    <span class="folder-actions">
-                        <button class="folder-action-btn folder-sub" data-folder-id="${folder.id}" title="New folder inside this folder">+ Folder</button>
-                        <button class="folder-action-btn folder-rename" data-folder-id="${folder.id}" title="Rename folder">Rename</button>
-                        <button class="folder-action-btn folder-delete" data-folder-id="${folder.id}" title="Delete folder">Delete</button>
-                    </span>
-                    <button class="more-btn folder-more" data-folder-id="${folder.id}" type="button" title="More" aria-label="More">⋯</button>
+                    <button class="more-btn tree-menu-btn folder-more" data-folder-id="${folder.id}" type="button" title="Menu" aria-label="Menu" aria-haspopup="menu">☰</button>
                     <button class="folder-add" data-folder-id="${folder.id}" title="New note in this folder">+</button>
                 </div>
                 ${expanded ? `<div class="folder-items">${inner || '<div class="folder-empty">Empty</div>'}</div>` : ''}
@@ -592,6 +589,114 @@
         if (!options.length) { toast('There is no other folder to move it into'); return; }
         showActionSheet(`Move "${folder.name}" to`, options);
     }
+    /* ---------- ☰ menus in the explorer ---------- */
+    // background colour of a tree item; dark text on light colours, light text on dark ones
+    function bgStyle(color) {
+        const r = parseInt(color.slice(1, 3), 16), g = parseInt(color.slice(3, 5), 16), b = parseInt(color.slice(5, 7), 16);
+        const light = (0.299 * r + 0.587 * g + 0.114 * b) > 140;
+        return `--item-bg:${color};--item-fg:${light ? '#14141c' : '#f5f5ff'};--item-dim:${light ? 'rgba(20,20,28,.65)' : 'rgba(245,245,255,.7)'}`;
+    }
+    function setItemBg(item, color, isFolder) {
+        if ((item.bgColor || '') === (color || '')) return;
+        if (color) item.bgColor = color; else delete item.bgColor;
+        if (isFolder) { item.modifiedAt = new Date().toISOString(); saveFolders(); renderTree(); }
+        else { touch(item); renderTree(); }
+    }
+
+    const menuEl = document.createElement('div');
+    menuEl.className = 'tree-menu';
+    menuEl.setAttribute('role', 'menu');
+    menuEl.hidden = true;
+    document.body.appendChild(menuEl);
+    let menuActions = [];
+    let menuAnchor = null;
+
+    function placeMenu(anchor) {
+        const r = anchor.getBoundingClientRect();
+        menuEl.style.left = '0px';
+        menuEl.style.top = '0px';
+        const w = menuEl.offsetWidth, h = menuEl.offsetHeight;
+        let left = Math.min(r.right - w, window.innerWidth - w - 8);
+        left = Math.max(8, left);
+        let top = r.bottom + 4;
+        if (top + h > window.innerHeight - 8) top = Math.max(8, r.top - h - 4);
+        menuEl.style.left = `${left}px`;
+        menuEl.style.top = `${top}px`;
+    }
+    function closeMenu() {
+        if (menuEl.hidden) return;
+        menuEl.hidden = true;
+        if (menuAnchor) menuAnchor.classList.remove('open');
+        menuAnchor = null;
+    }
+    // Desktop: small drop-down under the ☰ button. Phone: the big action sheet.
+    function showMenu(anchor, title, actions) {
+        if (isMobile() || window.matchMedia('(hover: none)').matches) { showActionSheet(title, actions); return; }
+        if (menuAnchor === anchor && !menuEl.hidden) { closeMenu(); return; }
+        closeMenu();
+        menuActions = actions;
+        menuEl.innerHTML = actions.map((a, i) =>
+            `<button type="button" role="menuitem" class="tree-menu-item${a.danger ? ' danger' : ''}" data-i="${i}"><span class="tree-menu-icon">${a.icon || ''}</span>${escapeHtml(a.label)}</button>`).join('');
+        menuEl.hidden = false;
+        menuAnchor = anchor;
+        anchor.classList.add('open');
+        placeMenu(anchor);
+        menuEl.querySelector('button').focus({ preventScroll: true });
+    }
+    // Colour swatches (same colours as the text colours in notes)
+    function pickBgColor(anchor, current, onPick) {
+        closeMenu();
+        menuActions = [];
+        menuEl.innerHTML = `<div class="tree-menu-title">Background colour</div><div class="tree-menu-colors">${TEXT_COLORS.map(([c, name]) =>
+            `<button type="button" class="text-color${c ? '' : ' reset'}${(current || '') === c ? ' selected' : ''}" data-bg="${c}" title="${c ? name : 'No colour'}" aria-label="${c ? name : 'No colour'}" style="${c ? `background:${c}` : ''}">${c ? '' : '∅'}</button>`).join('')}</div>`;
+        menuEl._onPick = onPick;
+        menuEl.hidden = false;
+        // on a phone the button may be hidden behind the sheet: put the colours in the middle
+        if (!anchor.isConnected || anchor.offsetParent === null) {
+            menuEl.style.left = `${Math.max(8, (window.innerWidth - menuEl.offsetWidth) / 2)}px`;
+            menuEl.style.top = `${Math.max(8, (window.innerHeight - menuEl.offsetHeight) / 2)}px`;
+        } else {
+            menuAnchor = anchor;
+            anchor.classList.add('open');
+            placeMenu(anchor);
+        }
+    }
+    menuEl.addEventListener('click', (e) => {
+        const color = e.target.closest('[data-bg]');
+        if (color) {
+            const onPick = menuEl._onPick;
+            closeMenu();
+            if (onPick) onPick(color.dataset.bg);
+            return;
+        }
+        const item = e.target.closest('.tree-menu-item');
+        if (!item) return;
+        const action = menuActions[Number(item.dataset.i)];
+        const anchor = menuAnchor;
+        closeMenu();
+        if (action) {
+            // keep the anchor so a follow-up (the colour picker) can open next to it
+            if (anchor) anchor.isConnected && anchor.classList.remove('open');
+            action.run();
+        }
+    });
+    document.addEventListener('pointerdown', (e) => {
+        if (menuEl.hidden || menuEl.contains(e.target) || (menuAnchor && menuAnchor.contains(e.target))) return;
+        closeMenu();
+    }, true);
+    document.addEventListener('keydown', (e) => {
+        if (menuEl.hidden) return;
+        if (e.key === 'Escape') { e.stopPropagation(); closeMenu(); return; }
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            const items = [...menuEl.querySelectorAll('button')];
+            const i = items.indexOf(document.activeElement);
+            const next = items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length];
+            if (next) { e.preventDefault(); next.focus(); }
+        }
+    }, true);
+    window.addEventListener('resize', closeMenu);
+    treeEl.addEventListener('scroll', closeMenu, { passive: true });
+
     function refreshFolderSelect() {
         if (state.currentNoteId) $('noteFolder').innerHTML = folderOptions(noteById(state.currentNoteId)?.folderId);
     }
@@ -655,10 +760,11 @@
             e.stopPropagation();
             const note = noteById(noteMore.dataset.noteId);
             if (!note) return;
-            showActionSheet(note.title.trim() || 'Untitled', [
-                { label: 'Open', run: () => { selectNote(note.id); if (isMobile()) app.classList.remove('mobile-open'); } },
-                { label: 'Rename', run: () => renameNote(note.id) },
-                { label: 'Delete', danger: true, run: () => deleteNote(note.id) }
+            showMenu(noteMore, note.title.trim() || 'Untitled', [
+                ...(isMobile() ? [{ label: 'Open', icon: '📄', run: () => { selectNote(note.id); app.classList.remove('mobile-open'); } }] : []),
+                { label: 'Rename', icon: '✏️', run: () => renameNote(note.id) },
+                { label: 'Background colour', icon: '🎨', run: () => pickBgColor(noteMore, note.bgColor, (c) => setItemBg(note, c)) },
+                { label: 'Delete', icon: '🗑', danger: true, run: () => deleteNote(note.id) }
             ]);
             return;
         }
@@ -667,12 +773,13 @@
             e.stopPropagation();
             const folder = state.folders.find((f) => f.id === folderMore.dataset.folderId);
             if (!folder) return;
-            showActionSheet(folder.name, [
-                { label: 'New note in this folder', run: () => newNote({ folderId: folder.id }) },
-                { label: 'New folder inside', run: () => createFolder(folder.id) },
-                { label: 'Move to…', run: () => chooseFolderDestination(folder) },
-                { label: 'Rename folder', run: () => renameFolder(folder.id) },
-                { label: 'Delete folder', danger: true, run: () => deleteFolder(folder.id) }
+            showMenu(folderMore, folder.name, [
+                { label: 'New note in this folder', icon: '📝', run: () => newNote({ folderId: folder.id }) },
+                { label: '+ Folder (inside this one)', icon: '📁', run: () => createFolder(folder.id) },
+                { label: 'Move to…', icon: '↪', run: () => chooseFolderDestination(folder) },
+                { label: 'Rename', icon: '✏️', run: () => renameFolder(folder.id) },
+                { label: 'Background colour', icon: '🎨', run: () => pickBgColor(folderMore, folder.bgColor, (c) => setItemBg(folder, c, true)) },
+                { label: 'Delete', icon: '🗑', danger: true, run: () => deleteFolder(folder.id) }
             ]);
             return;
         }
@@ -787,13 +894,14 @@
             const target = e.target.closest('.folder-header');
             const after = !!target && target.classList.contains('drop-after');
             const inside = !!target && target.classList.contains('drop-inside');
+            const before = !!target && target.classList.contains('drop-before');
             const id = draggedFolderId;
             draggedFolderId = null;
             clearTreeDropMarkers();
             if (!target) return;
             e.preventDefault();
             if (inside) moveFolderInto(id, target.dataset.folderId);
-            else if (target.classList.contains('drop-before') || after || target.dataset.folderId === '__none') {
+            else if (before || after || target.dataset.folderId === '__none') {
                 moveFolderNextTo(id, target.dataset.folderId, after);
             }
             return;
@@ -1470,8 +1578,8 @@
     /* ---- text colours ---- */
     const TEXT_COLORS = [
         ['', 'Default colour'],
-        ['#ffadad', 'Pastel red'], ['#ffd6a5', 'Pastel orange'], ['#fdffb6', 'Pastel yellow'],
-        ['#caffbf', 'Pastel green'], ['#a0c4ff', 'Pastel blue'], ['#d4b5ff', 'Pastel purple'],
+        ['#ff9494', 'Pastel red'], ['#ffca8c', 'Pastel orange'], ['#fcff9c', 'Pastel yellow'],
+        ['#b5ffa6', 'Pastel green'], ['#86b4ff', 'Pastel blue'], ['#c59cff', 'Pastel purple'],
         ['#000000', 'Black']
     ];
     $('textColors').innerHTML = TEXT_COLORS.map(([c, name]) =>
