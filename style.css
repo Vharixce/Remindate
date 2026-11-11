@@ -1888,3 +1888,10 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .ring-ticks text { font-size: 5.5px; text-anchor: middle; fill: #c7c4f5; font-weight: 600; font-family: inherit; }
 .ring-ticks text.on-day { fill: #374151; }
 @media (max-width: 760px) { .clock-face { width: 136px; height: 136px; } }
+
+/* select tool in the drawing */
+.pick-actions { display: inline-flex; align-items: center; gap: 6px; padding-left: 8px; margin-left: 2px; border-left: 1px solid var(--border); }
+.pick-actions[hidden] { display: none; }
+.pick-count { font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.tool-btn.pick-btn { width: auto; padding: 0 9px; white-space: nowrap; font-size: 13px; }
+.tool-btn.pick-btn.danger { color: var(--danger); }

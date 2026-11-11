@@ -1168,6 +1168,8 @@
         gridHistory = [];
         gridRedo = [];
         drawRedo = [];
+        drawUndo = [];
+        drawPick = [];
 
         if (empty) {
             updatePrivateBtn(null);
@@ -1265,7 +1267,7 @@
         $('noteTitle').value = '';
         state.draw.strokes = [];
         drawSel = null;
-        gridHistory = []; gridRedo = []; drawRedo = [];
+        gridHistory = []; gridRedo = []; drawRedo = []; drawUndo = []; drawPick = [];
         textDirty = false;
         $('privateLockTitle').textContent = note.title.trim() || 'Untitled';
         $('privateLockInput').value = '';
@@ -1830,8 +1832,38 @@
         if (draggingAppItem()) { e.dataTransfer.dropEffect = 'none'; return; }
         if (Array.from(e.dataTransfer.types || []).includes('Files')) e.preventDefault();
     });
+    // Dragging a picture that is already in the note: Chrome also hands it over as a "file",
+    // which used to add a second copy. Remember the picture and just move it instead.
+    let movingNoteImg = null;
+    editorEl.addEventListener('dragstart', (e) => {
+        const img = e.target && e.target.closest && e.target.closest('img');
+        movingNoteImg = img && editorEl.contains(img) ? img : null;
+    });
+    editorEl.addEventListener('dragend', () => { movingNoteImg = null; });
+
     editorEl.addEventListener('drop', (e) => {
         if (draggingAppItem()) { e.preventDefault(); return; }
+        if (movingNoteImg) {
+            const img = movingNoteImg;
+            movingNoteImg = null;
+            e.preventDefault();
+            if (!editorEl.contains(img)) return;
+            placeCaretAtPoint(e.clientX, e.clientY);
+            const sel = window.getSelection();
+            if (sel.rangeCount && editorEl.contains(sel.anchorNode) && !img.contains(sel.anchorNode)) {
+                const range = sel.getRangeAt(0);
+                range.collapse(true);
+                range.insertNode(img); // moves the picture (one node, so never a copy)
+                range.setStartAfter(img);
+                range.collapse(true);
+                sel.removeAllRanges();
+                sel.addRange(range);
+            }
+            selectImage(img);
+            textDirty = true;
+            queueSave();
+            return;
+        }
         const files = [...(e.dataTransfer.files || [])].filter((f) => f.type.startsWith('image/'));
         const audio = [...(e.dataTransfer.files || [])].filter((f) => f.type.startsWith('audio/'));
         if (!files.length && !audio.length) return;
@@ -4324,6 +4356,7 @@
         ctx.restore();
         state.draw.strokes.forEach(drawStroke);
         drawSelectionFrame();
+        drawPickFrame();
     }
 
     function drawStroke(stroke) {
@@ -4351,6 +4384,194 @@
         }
         ctx.stroke();
     }
+
+    /* ---------------- select tool: pick parts of the drawing, move / copy / delete them ---------------- */
+    let drawPick = [];     // the selected items
+    let marquee = null;    // { a, b } while dragging a selection box
+    let pickDrag = null;   // while moving the selection
+    let drawClipboard = null;
+    const COPY_MARK = '[Remindate drawing selection]';
+
+    function cloneItem(s) {
+        if (s.image) return { ...s };
+        return { color: s.color, thicknessRatio: s.thicknessRatio, points: s.points.map((p) => ({ x: p.x, y: p.y })) };
+    }
+    function itemBox(s) {
+        if (s.image) return { x0: s.x, y0: s.y, x1: s.x + s.w, y1: s.y + s.h };
+        const r = (s.thicknessRatio || 0) / 2;
+        const ry = r * canvas.width / (canvas.height || 1);
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        s.points.forEach((p) => { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); });
+        return { x0: x0 - r, y0: y0 - ry, x1: x1 + r, y1: y1 + ry };
+    }
+    function pickBox() {
+        if (!drawPick.length) return null;
+        return drawPick.map(itemBox).reduce((a, b) => ({
+            x0: Math.min(a.x0, b.x0), y0: Math.min(a.y0, b.y0), x1: Math.max(a.x1, b.x1), y1: Math.max(a.y1, b.y1)
+        }));
+    }
+    // the top-most item under a point (pen lines count when you are close to them)
+    function itemAt(pos) {
+        const tol = 10 / (canvas.clientWidth || 1);
+        for (let i = state.draw.strokes.length - 1; i >= 0; i--) {
+            const s = state.draw.strokes[i];
+            if (s.image) {
+                if (pos.x >= s.x && pos.x <= s.x + s.w && pos.y >= s.y && pos.y <= s.y + s.h) return s;
+            } else {
+                const r = (s.thicknessRatio || 0) / 2 + tol;
+                if (s.points.some((p) => Math.hypot(p.x - pos.x, (p.y - pos.y) * canvas.height / canvas.width) <= r)) return s;
+            }
+        }
+        return null;
+    }
+
+    function updatePickBar() {
+        const show = state.draw.tool === 'select' && drawPick.length > 0;
+        $('pickActions').hidden = !show;
+        if (show) $('pickCount').textContent = drawPick.length === 1 ? '1 selected' : `${drawPick.length} selected`;
+    }
+
+    function drawPickFrame() {
+        drawPick = drawPick.filter((s) => state.draw.strokes.includes(s));
+        const W = canvas.width, H = canvas.height;
+        const px = W / (canvas.clientWidth || W);
+        ctx.save();
+        ctx.lineWidth = 1.5 * px;
+        ctx.setLineDash([6 * px, 4 * px]);
+        const box = pickBox();
+        if (box) {
+            const pad = 6 * px;
+            ctx.strokeStyle = '#7c6ff0';
+            ctx.fillStyle = 'rgba(124,111,240,.08)';
+            ctx.fillRect(box.x0 * W - pad, box.y0 * H - pad, (box.x1 - box.x0) * W + 2 * pad, (box.y1 - box.y0) * H + 2 * pad);
+            ctx.strokeRect(box.x0 * W - pad, box.y0 * H - pad, (box.x1 - box.x0) * W + 2 * pad, (box.y1 - box.y0) * H + 2 * pad);
+        }
+        if (marquee) {
+            ctx.strokeStyle = '#a5b4fc';
+            ctx.fillStyle = 'rgba(165,180,252,.12)';
+            const x = Math.min(marquee.a.x, marquee.b.x) * W, y = Math.min(marquee.a.y, marquee.b.y) * H;
+            const w = Math.abs(marquee.b.x - marquee.a.x) * W, h = Math.abs(marquee.b.y - marquee.a.y) * H;
+            ctx.fillRect(x, y, w, h);
+            ctx.strokeRect(x, y, w, h);
+        }
+        ctx.restore();
+        updatePickBar();
+    }
+
+    function startPick(e) {
+        const pos = pointerPos(e, true);
+        try { canvas.setPointerCapture?.(e.pointerId); } catch (err) { /* ignore */ }
+        const box = pickBox();
+        const pad = 6 / (canvas.clientWidth || 1);
+        const inBox = box && pos.x >= box.x0 - pad && pos.x <= box.x1 + pad && pos.y >= box.y0 - pad && pos.y <= box.y1 + pad;
+        const hit = inBox ? null : itemAt(pos);
+        if (!inBox && hit) drawPick = [hit]; // press on an item: select it and move it right away
+        if (inBox || hit) {
+            // move: change copies, so Ctrl+Z gets the old place back
+            pushDrawUndo();
+            const copies = new Map(drawPick.map((s) => [s, cloneItem(s)]));
+            state.draw.strokes = state.draw.strokes.map((s) => copies.get(s) || s);
+            drawPick = [...copies.values()];
+            pickDrag = { start: pos, orig: drawPick.map(cloneItem), moved: false };
+            canvas.style.cursor = 'move';
+            renderStrokes();
+            return;
+        }
+        drawPick = [];
+        marquee = { a: pos, b: pos };
+        renderStrokes();
+    }
+
+    function movePick(e) {
+        const pos = pointerPos(e, true);
+        if (pickDrag) {
+            e.preventDefault();
+            const dx = pos.x - pickDrag.start.x, dy = pos.y - pickDrag.start.y;
+            if (Math.abs(dx) + Math.abs(dy) > 0.001) pickDrag.moved = true;
+            drawPick.forEach((s, i) => {
+                const o = pickDrag.orig[i];
+                if (s.image) { s.x = o.x + dx; s.y = o.y + dy; }
+                else s.points.forEach((p, j) => { p.x = o.points[j].x + dx; p.y = o.points[j].y + dy; });
+            });
+            renderStrokes();
+            return;
+        }
+        if (marquee) {
+            e.preventDefault();
+            marquee.b = pos;
+            renderStrokes();
+            return;
+        }
+        // hover: show where you can grab
+        const box = pickBox();
+        const inBox = box && pos.x >= box.x0 && pos.x <= box.x1 && pos.y >= box.y0 && pos.y <= box.y1;
+        canvas.style.cursor = inBox || itemAt(pos) ? 'move' : 'default';
+    }
+
+    function endPick() {
+        if (pickDrag) {
+            const moved = pickDrag.moved;
+            pickDrag = null;
+            if (!moved) drawUndo.pop(); // just a click: nothing changed
+            renderStrokes();
+            if (moved) flushEditor();
+            return;
+        }
+        const x0 = Math.min(marquee.a.x, marquee.b.x), x1 = Math.max(marquee.a.x, marquee.b.x);
+        const y0 = Math.min(marquee.a.y, marquee.b.y), y1 = Math.max(marquee.a.y, marquee.b.y);
+        marquee = null;
+        if (x1 - x0 < 0.004 && y1 - y0 < 0.004) { drawPick = []; renderStrokes(); return; }
+        // everything that touches the box
+        drawPick = state.draw.strokes.filter((s) => {
+            if (s.image) return s.x < x1 && s.x + s.w > x0 && s.y < y1 && s.y + s.h > y0;
+            return s.points.some((p) => p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1);
+        });
+        renderStrokes();
+    }
+
+    function deletePick() {
+        if (!drawPick.length) return false;
+        pushDrawUndo();
+        const gone = new Set(drawPick);
+        state.draw.strokes = state.draw.strokes.filter((s) => !gone.has(s));
+        drawPick = [];
+        renderStrokes();
+        flushEditor();
+        return true;
+    }
+    // put copies of the items in the drawing, a little to the right and down, and select them
+    function placeCopies(items, offset = 0.03) {
+        if (!items || !items.length) return;
+        pushDrawUndo();
+        const copies = items.map((s) => {
+            const c = cloneItem(s);
+            if (c.image) { c.x += offset; c.y += offset; }
+            else c.points.forEach((p) => { p.x += offset; p.y += offset; });
+            return c;
+        });
+        state.draw.strokes = state.draw.strokes.concat(copies);
+        drawPick = copies;
+        if (state.draw.tool !== 'select') setTool('select');
+        renderStrokes();
+        flushEditor();
+    }
+    function duplicatePick() { placeCopies(drawPick); }
+
+    // Ctrl+C / Ctrl+X: keep a copy of the selection (and mark the clipboard so Ctrl+V pastes it)
+    function drawPickActive() {
+        if (state.prefs.mode !== 'draw' || state.prefs.activeTab === 'calendar' || !state.currentNoteId) return false;
+        if (document.querySelector('.modal.active')) return false;
+        const t = document.activeElement && document.activeElement.closest && document.activeElement.closest('input, textarea, [contenteditable="true"]');
+        return !(t && t.offsetParent !== null);
+    }
+    ['copy', 'cut'].forEach((type) => document.addEventListener(type, (e) => {
+        if (!drawPickActive() || state.draw.tool !== 'select' || !drawPick.length) return;
+        e.preventDefault();
+        drawClipboard = drawPick.map(cloneItem);
+        if (e.clipboardData) e.clipboardData.setData('text/plain', COPY_MARK);
+        if (type === 'cut') deletePick();
+        else toast(drawPick.length === 1 ? 'Copied — press Ctrl+V to paste' : `Copied ${drawPick.length} items — press Ctrl+V to paste`);
+    }));
 
     function pointerPos(e, unclamped) {
         const rect = canvas.getBoundingClientRect();
@@ -4459,11 +4680,11 @@
                 y: Math.min(1 - h, Math.max(0, cy - h / 2)) + i * 0.03,
                 w, h, points: []
             };
+            if (!added) pushDrawUndo();
             state.draw.strokes.push(item);
             added = item;
         }
         if (!added) return;
-        drawRedo = [];
         drawSel = added;
         renderStrokes();
         flushEditor();
@@ -4472,9 +4693,9 @@
 
     function deleteSelectedPicture() {
         if (!drawSel) return false;
+        pushDrawUndo();
         state.draw.strokes = state.draw.strokes.filter((s) => s !== drawSel);
         drawSel = null;
-        drawRedo = [];
         renderStrokes();
         flushEditor();
         return true;
@@ -4500,7 +4721,15 @@
         const typing = e.target.closest && e.target.closest('input, textarea, [contenteditable="true"], [contenteditable=""]');
         if (typing && typing.offsetParent !== null) return;
         const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => f.type.startsWith('image/'));
-        if (!files.length) return;
+        if (!files.length) {
+            // pieces copied with the select tool
+            const text = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+            if (drawClipboard && text === COPY_MARK && !isPrivateLocked(noteById(state.currentNoteId))) {
+                e.preventDefault();
+                placeCopies(drawClipboard);
+            }
+            return;
+        }
         e.preventDefault();
         addDrawImages(files);
     });
@@ -4528,11 +4757,21 @@
             const hit = selectionHit(pos);
             if (hit) {
                 try { canvas.setPointerCapture?.(e.pointerId); } catch (err) { /* ignore */ }
+                // keep the old version for Ctrl+Z: change a copy of the picture
+                pushDrawUndo();
+                const copy = { ...drawSel };
+                state.draw.strokes = state.draw.strokes.map((s) => (s === drawSel ? copy : s));
+                drawSel = copy;
                 drawSelDrag = { mode: hit, start: pos, orig: { x: drawSel.x, y: drawSel.y, w: drawSel.w, h: drawSel.h } };
                 return;
             }
             drawSel = null;
             renderStrokes();
+            return;
+        }
+
+        if (state.draw.tool === 'select') {
+            startPick(e);
             return;
         }
 
@@ -4546,6 +4785,7 @@
         const pos = pointerPos(e);
         if (state.draw.tool === 'eraser') {
             state.draw.drawing = true;
+            eraseSaved = false;
             eraseAt(pos);
             return;
         }
@@ -4560,14 +4800,15 @@
             thicknessRatio: state.draw.size / (canvas.clientWidth || canvas.width),
             points: [pos]
         };
+        pushDrawUndo();
         state.draw.strokes.push(state.draw.current);
-        drawRedo = [];
         state.draw.drawing = true;
         renderStrokes();
     }
 
     function moveStroke(e) {
         if (drawSelDrag) { dragSelection(e); return; }
+        if (state.draw.tool === 'select') { movePick(e); return; }
         if (drawSel && !state.draw.drawing) {
             const hit = selectionHit(pointerPos(e, true));
             canvas.style.cursor = hit === 'resize' ? 'nwse-resize' : hit === 'move' ? 'move' : '';
@@ -4597,22 +4838,25 @@
 
     function endStroke() {
         if (drawSelDrag) { drawSelDrag = null; flushEditor(); return; }
+        if (pickDrag || marquee) { endPick(); return; }
         if (!state.draw.drawing) return;
         state.draw.drawing = false;
         state.draw.current = null;
         flushEditor();
     }
 
+    let eraseSaved = false;
     function eraseAt(pos) {
         const note = noteById(state.currentNoteId);
         if (!note) return;
         const radius = Math.max(0.006, (state.draw.size / 2) / (canvas.clientWidth || canvas.width));
-        const before = state.draw.strokes.length;
-        state.draw.strokes = state.draw.strokes.filter((stroke) =>
+        const before = state.draw.strokes;
+        const after = before.filter((stroke) =>
             !stroke.points.some((p) => Math.hypot(p.x - pos.x, p.y - pos.y) <= radius)
         );
-        if (state.draw.strokes.length !== before) {
-            drawRedo = [];
+        if (after.length !== before.length) {
+            if (!eraseSaved) { pushDrawUndo(); eraseSaved = true; }
+            state.draw.strokes = after;
             renderStrokes();
             flushEditor();
         }
@@ -4626,10 +4870,13 @@
 
     function setTool(tool) {
         state.draw.tool = tool;
+        if (tool !== 'select' && drawPick.length) { drawPick = []; renderStrokes(); }
+        updatePickBar();
+        $('toolSelect').classList.toggle('active', tool === 'select');
         $('toolPen').classList.toggle('active', tool === 'pen');
         $('toolEraser').classList.toggle('active', tool === 'eraser');
         $('toolFill').classList.toggle('active', tool === 'fill');
-        canvas.style.cursor = tool === 'eraser' ? 'cell' : (tool === 'fill' ? 'copy' : 'crosshair');
+        canvas.style.cursor = tool === 'eraser' ? 'cell' : tool === 'fill' ? 'copy' : tool === 'select' ? 'default' : 'crosshair';
     }
 
     $('toolImage').addEventListener('click', () => $('drawImageFile').click());
@@ -4639,22 +4886,33 @@
         addDrawImages(files);
     });
     $('toolPen').addEventListener('click', () => setTool('pen'));
+    $('toolSelect').addEventListener('click', () => setTool('select'));
+    $('pickCopy').addEventListener('click', () => duplicatePick());
+    $('pickDelete').addEventListener('click', () => deletePick());
     $('toolEraser').addEventListener('click', () => setTool('eraser'));
     $('toolFill').addEventListener('click', () => setTool('fill'));
 
     $('toolUndo').addEventListener('click', () => {
-        const stroke = state.draw.strokes.pop();
-        if (!stroke) return;
-        drawRedo.push(stroke);
+        let prev = drawUndo.pop();
+        // nothing remembered (e.g. after a reload): take away the last item like before
+        if (!prev) {
+            if (!state.draw.strokes.length) return;
+            prev = state.draw.strokes.slice(0, -1);
+        }
+        drawRedo.push(state.draw.strokes);
+        state.draw.strokes = prev;
+        drawSel = null;
         renderStrokes();
         flushEditor();
     });
 
-    // Redo (Ctrl+Y): put back the stroke that was undone last
+    // Redo (Ctrl+Y): bring back what was undone last
     function redoDraw() {
-        const stroke = drawRedo.pop();
-        if (!stroke) return;
-        state.draw.strokes.push(stroke);
+        const next = drawRedo.pop();
+        if (!next) return;
+        drawUndo.push(state.draw.strokes);
+        state.draw.strokes = next;
+        drawSel = null;
         renderStrokes();
         flushEditor();
     }
@@ -4662,8 +4920,9 @@
     $('toolClear').addEventListener('click', async () => {
         if (!state.draw.strokes.length) return;
         if (!(await askConfirm('Clear drawing', 'Clear the entire drawing?', 'Clear'))) return;
+        pushDrawUndo();
         state.draw.strokes = [];
-        drawRedo = [];
+        drawPick = [];
         renderStrokes();
         flushEditor();
     });
@@ -4710,7 +4969,14 @@
     const gridCache = {};
     let gridTool = 'pen';
     let gridStroke = null;   // { changes: Map(id -> previous color), last: {x, y} }
-    let drawRedo = [];       // undone drawing strokes that Ctrl+Y can redo
+    let drawRedo = [];       // drawing versions that Ctrl+Y can bring back
+    let drawUndo = [];       // earlier versions of the drawing (lists of items) for Ctrl+Z
+    // Call before every change to the drawing: remembers the drawing as it is now
+    function pushDrawUndo() {
+        drawUndo.push(state.draw.strokes.slice());
+        if (drawUndo.length > 100) drawUndo.shift();
+        drawRedo = [];
+    }
     let gridHistory = [];    // undo steps for the open note
     let gridRedo = [];       // undone steps that Ctrl+Y can redo
 
@@ -6571,6 +6837,11 @@
                 else if (mode === 'draw') redoDraw();
                 else redoGrid();
             }
+        }
+        if (drawPick.length && state.draw.tool === 'select' && drawPickActive()) {
+            if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deletePick(); return; }
+            if (e.key === 'Escape') { drawPick = []; renderStrokes(); return; }
+            if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') { e.preventDefault(); duplicatePick(); return; }
         }
         if (drawSel && state.prefs.mode === 'draw' && !document.querySelector('.modal.active')) {
             const t = e.target.closest && e.target.closest('input, textarea, [contenteditable="true"]');

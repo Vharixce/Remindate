@@ -163,6 +163,7 @@
                             <button class="swatch" id="colorSwatch" title="Text color"></button>
                             <input type="range" id="brushSize" min="1" max="40" value="6" title="Thickness">
                             <span class="step-value" id="brushSizeLabel">6</span>
+                            <button class="tool-btn" id="toolSelect" title="Select: drag a box around parts of the drawing, then move, copy (Ctrl+C / Ctrl+D) or delete them">⬚</button>
                             <button class="tool-btn active" id="toolPen" title="Pen">✎</button>
                             <button class="tool-btn" id="toolEraser" title="Eraser">⌫</button>
                             <button class="tool-btn" id="toolFill" title="Fill canvas">▦</button>
@@ -171,6 +172,11 @@
                             <button class="tool-btn" id="toolUndo" title="Undo">↶</button>
                             <button class="tool-btn" id="toolClear" title="Clear all">✕</button>
                             <button class="tool-btn" id="toolCanvasBg" title="Canvas background">◧</button>
+                            <span class="pick-actions" id="pickActions" hidden>
+                                <span class="pick-count" id="pickCount"></span>
+                                <button class="tool-btn pick-btn" id="pickCopy" type="button" title="Make a copy (Ctrl+D)">⧉ Copy</button>
+                                <button class="tool-btn pick-btn danger" id="pickDelete" type="button" title="Delete (Delete key)">🗑 Delete</button>
+                            </span>
                         </div>
                     </div>
 
