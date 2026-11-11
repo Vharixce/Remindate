@@ -1204,7 +1204,7 @@
 
     // A drawing item is a pen line, or a picture ({ image, x, y, w, h } as parts of the canvas size)
     function copyStroke(s) {
-        if (s.image) return { image: s.image, x: s.x, y: s.y, w: s.w, h: s.h, points: [] };
+        if (s.image) return { image: s.image, x: s.x, y: s.y, w: s.w, h: s.h, points: [], ...(s.fill ? { fill: true } : {}) };
         return {
             color: s.color,
             thicknessRatio: s.thicknessRatio,
@@ -1833,6 +1833,15 @@
             return;
         }
         const html = dt.getData('text/html');
+        // a piece copied from the drawing or the grid: insert it like any other picture
+        const own = html && /<img[^>]*data-remindate-copy[^>]*src="(data:image\/[^"]+)"/i.exec(html);
+        if (own) {
+            e.preventDefault();
+            fetch(own[1]).then((r) => r.blob())
+                .then((blob) => insertImageFiles([new File([blob], 'drawing.png', { type: blob.type || 'image/png' })]))
+                .catch(() => toast('Could not paste that picture'));
+            return;
+        }
         if (html) {
             e.preventDefault();
             document.execCommand('insertHTML', false, sanitizeHtml(html));
@@ -4385,35 +4394,112 @@
         ctx.fillStyle = note ? (note.canvasBackground || DEFAULT_CANVAS_BG) : DEFAULT_CANVAS_BG;
         ctx.fillRect(0, 0, canvas.width, canvas.height);
         ctx.restore();
-        state.draw.strokes.forEach(drawStroke);
+        state.draw.strokes.forEach((item) => drawStroke(item));
         drawSelectionFrame();
         drawPickFrame();
     }
 
-    function drawStroke(stroke) {
+    // draws one item; by default on the drawing itself, or on another canvas (g, size W×H, shifted by ox/oy)
+    function drawStroke(stroke, g = ctx, W = canvas.width, H = canvas.height, ox = 0, oy = 0) {
         if (stroke.image) {
             const img = drawImageEl(stroke.image);
-            if (img.complete && img.naturalWidth) {
-                ctx.drawImage(img, stroke.x * canvas.width, stroke.y * canvas.height, stroke.w * canvas.width, stroke.h * canvas.height);
+            if (img instanceof HTMLCanvasElement || (img.complete && img.naturalWidth)) {
+                g.drawImage(img, ox + stroke.x * W, oy + stroke.y * H, stroke.w * W, stroke.h * H);
             }
             return;
         }
         if (!stroke.points.length) return;
-        ctx.strokeStyle = stroke.color || '#000000';
-        ctx.lineWidth = Math.max(1, (stroke.thicknessRatio || 0.006) * canvas.width);
-        ctx.lineCap = 'round';
-        ctx.lineJoin = 'round';
-        ctx.beginPath();
+        g.strokeStyle = stroke.color || '#000000';
+        g.lineWidth = Math.max(1, (stroke.thicknessRatio || 0.006) * W);
+        g.lineCap = 'round';
+        g.lineJoin = 'round';
+        g.beginPath();
         const first = stroke.points[0];
-        ctx.moveTo(first.x * canvas.width, first.y * canvas.height);
+        g.moveTo(ox + first.x * W, oy + first.y * H);
         for (let i = 1; i < stroke.points.length; i++) {
             const p = stroke.points[i];
-            ctx.lineTo(p.x * canvas.width, p.y * canvas.height);
+            g.lineTo(ox + p.x * W, oy + p.y * H);
         }
         if (stroke.points.length === 1) {
-            ctx.lineTo(first.x * canvas.width + 0.01, first.y * canvas.height);
+            g.lineTo(ox + first.x * W + 0.01, oy + first.y * H);
         }
-        ctx.stroke();
+        g.stroke();
+    }
+
+    /* ---------------- bucket fill (like in Paint) ----------------
+     * Fills the closed area you click on with the current colour. The filled area becomes
+     * its own item (a picture with see-through edges), so it can be selected, moved and undone. */
+    function bucketFill(pos) {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        const W = canvas.width, H = canvas.height;
+        // a clean picture of the drawing (no selection frames)
+        const off = document.createElement('canvas');
+        off.width = W; off.height = H;
+        const g = off.getContext('2d', { willReadFrequently: true });
+        g.fillStyle = note.canvasBackground || DEFAULT_CANVAS_BG;
+        g.fillRect(0, 0, W, H);
+        state.draw.strokes.forEach((s) => drawStroke(s, g, W, H));
+        const data = g.getImageData(0, 0, W, H).data;
+        const sx = Math.min(W - 1, Math.max(0, Math.floor(pos.x * W)));
+        const sy = Math.min(H - 1, Math.max(0, Math.floor(pos.y * H)));
+        const i0 = (sy * W + sx) * 4;
+        const r0 = data[i0], g0 = data[i0 + 1], b0 = data[i0 + 2];
+        const fill = parseInt(state.draw.color.slice(1), 16);
+        const fr = (fill >> 16) & 255, fg = (fill >> 8) & 255, fb = fill & 255;
+        if (Math.abs(fr - r0) + Math.abs(fg - g0) + Math.abs(fb - b0) < 6) return; // already that colour
+        const TOL = 70; // how different a pixel may be and still count as "the same area"
+        const same = (p) => { const k = p * 4; return Math.abs(data[k] - r0) + Math.abs(data[k + 1] - g0) + Math.abs(data[k + 2] - b0) <= TOL; };
+        const mask = new Uint8Array(W * H);
+        const stack = [sy * W + sx];
+        let x0 = sx, x1 = sx, y0 = sy, y1 = sy, count = 0;
+        // scan-line flood fill
+        while (stack.length) {
+            const p = stack.pop();
+            const y = (p / W) | 0;
+            let x = p - y * W;
+            while (x > 0 && !mask[y * W + x - 1] && same(y * W + x - 1)) x--;
+            let up = false, down = false;
+            for (; x < W && !mask[y * W + x] && same(y * W + x); x++) {
+                const q = y * W + x;
+                mask[q] = 1; count++;
+                if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+                if (y > 0) { const a = q - W; if (!mask[a] && same(a)) { if (!up) { stack.push(a); up = true; } } else up = false; }
+                if (y < H - 1) { const b = q + W; if (!mask[b] && same(b)) { if (!down) { stack.push(b); down = true; } } else down = false; }
+            }
+        }
+        if (!count) return;
+        // grow the area 2 px so it slides under the soft edges of the lines (no light seams)
+        const pad = 2;
+        x0 = Math.max(0, x0 - pad); y0 = Math.max(0, y0 - pad); x1 = Math.min(W - 1, x1 + pad); y1 = Math.min(H - 1, y1 + pad);
+        const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+        const out = document.createElement('canvas');
+        out.width = bw; out.height = bh;
+        const og = out.getContext('2d');
+        const img = og.createImageData(bw, bh);
+        const px = img.data;
+        for (let y = y0; y <= y1; y++) {
+            for (let x = x0; x <= x1; x++) {
+                let on = mask[y * W + x];
+                for (let d = 1; !on && d <= pad; d++) {
+                    on = (x >= d && mask[y * W + x - d]) || (x + d < W && mask[y * W + x + d])
+                        || (y >= d && mask[(y - d) * W + x]) || (y + d < H && mask[(y + d) * W + x]);
+                }
+                if (!on) continue;
+                const k = ((y - y0) * bw + (x - x0)) * 4;
+                px[k] = fr; px[k + 1] = fg; px[k + 2] = fb; px[k + 3] = 255;
+            }
+        }
+        og.putImageData(img, 0, 0);
+        const item = { image: out.toDataURL('image/png'), x: x0 / W, y: y0 / H, w: bw / W, h: bh / H, points: [], fill: true };
+        drawImageCache.set(item.image, out); // draw it right away (no waiting for the picture to load)
+        pushDrawUndo();
+        // fills go above earlier fills but below the lines drawn after them
+        let at = 0;
+        state.draw.strokes.forEach((s, i) => { if (s.fill) at = i + 1; });
+        state.draw.strokes.splice(at, 0, item);
+        renderStrokes();
+        flushEditor();
     }
 
     /* ---------------- select tool: pick parts of the drawing, move / copy / delete them ---------------- */
@@ -4595,13 +4681,36 @@
         const t = document.activeElement && document.activeElement.closest && document.activeElement.closest('input, textarea, [contenteditable="true"]');
         return !(t && t.offsetParent !== null);
     }
+    // the selected part of the drawing as a picture (PNG), for pasting into the text
+    function drawPickPng() {
+        const box = pickBox();
+        if (!box) return null;
+        const note = noteById(state.currentNoteId);
+        const W = canvas.width, H = canvas.height;
+        const pad = 8;
+        let x0 = Math.floor(box.x0 * W) - pad, y0 = Math.floor(box.y0 * H) - pad;
+        let bw = Math.ceil((box.x1 - box.x0) * W) + 2 * pad, bh = Math.ceil((box.y1 - box.y0) * H) + 2 * pad;
+        const scale = Math.min(1, 1600 / Math.max(bw, bh));
+        const out = document.createElement('canvas');
+        out.width = Math.max(1, Math.round(bw * scale)); out.height = Math.max(1, Math.round(bh * scale));
+        const g = out.getContext('2d');
+        g.fillStyle = (note && note.canvasBackground) || DEFAULT_CANVAS_BG;
+        g.fillRect(0, 0, out.width, out.height);
+        drawPick.forEach((s) => drawStroke(s, g, W * scale, H * scale, -x0 * scale, -y0 * scale));
+        return out.toDataURL('image/png');
+    }
+    const copyImgHtml = (src) => (src ? `<img data-remindate-copy="1" src="${src}">` : '');
+
     ['copy', 'cut'].forEach((type) => document.addEventListener(type, (e) => {
         if (!drawPickActive() || state.draw.tool !== 'select' || !drawPick.length) return;
         e.preventDefault();
         drawClipboard = drawPick.map(cloneItem);
-        if (e.clipboardData) e.clipboardData.setData('text/plain', COPY_MARK);
+        if (e.clipboardData) {
+            e.clipboardData.setData('text/plain', COPY_MARK);
+            e.clipboardData.setData('text/html', copyImgHtml(drawPickPng())); // pastes as a picture in the text
+        }
         if (type === 'cut') deletePick();
-        else toast(drawPick.length === 1 ? 'Copied — press Ctrl+V to paste' : `Copied ${drawPick.length} items — press Ctrl+V to paste`);
+        else toast('Copied — Ctrl+V pastes it here, or as a picture in the text');
     }));
 
     function pointerPos(e, unclamped) {
@@ -4753,7 +4862,14 @@
         if (typing && typing.offsetParent !== null) return;
         const files = [...((e.clipboardData && e.clipboardData.files) || [])].filter((f) => f.type.startsWith('image/'));
         if (!files.length) {
-            // a picture copied from the text part of a note (or from a web page)
+            // pieces copied with the select tool (they also carry a picture: use the real lines instead)
+            const mark = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+            if (drawClipboard && mark === COPY_MARK && !isPrivateLocked(noteById(state.currentNoteId))) {
+                e.preventDefault();
+                placeCopies(drawClipboard);
+                return;
+            }
+            // a picture copied from the text part of a note, from the grid, or from a web page
             const html = e.clipboardData ? e.clipboardData.getData('text/html') : '';
             const m = html && /<img[^>]+src="(data:image\/[^"]+)"/i.exec(html);
             if (m && !isPrivateLocked(noteById(state.currentNoteId))) {
@@ -4818,9 +4934,7 @@
         }
 
         if (state.draw.tool === 'fill') {
-            note.canvasBackground = state.draw.color;
-            touch(note);
-            renderStrokes();
+            bucketFill(pointerPos(e));
             return;
         }
 
@@ -4910,6 +5024,7 @@
     canvas.addEventListener('pointercancel', endStroke);
     window.addEventListener('resize', fitCanvas);
 
+    const BUCKET_CURSOR = `url("data:image/svg+xml,${encodeURIComponent('<svg xmlns=\'http://www.w3.org/2000/svg\' width=\'24\' height=\'24\'><path d=\'M5 11l7-7 7 7-7 7z\' fill=\'white\' stroke=\'black\' stroke-width=\'1.5\'/><path d=\'M19 14c1.5 2 2 3 2 4a2 2 0 0 1-4 0c0-1 .5-2 2-4z\' fill=\'%23e11d1d\' stroke=\'black\'/></svg>').replace(/%2523/g, '%23')}") 2 20, copy`;
     function setTool(tool) {
         state.draw.tool = tool;
         if (tool !== 'select' && drawPick.length) { drawPick = []; renderStrokes(); }
@@ -4918,7 +5033,7 @@
         $('toolPen').classList.toggle('active', tool === 'pen');
         $('toolEraser').classList.toggle('active', tool === 'eraser');
         $('toolFill').classList.toggle('active', tool === 'fill');
-        canvas.style.cursor = tool === 'eraser' ? 'cell' : tool === 'fill' ? 'copy' : tool === 'select' ? 'default' : 'crosshair';
+        canvas.style.cursor = tool === 'eraser' ? 'cell' : tool === 'fill' ? BUCKET_CURSOR : tool === 'select' ? 'default' : 'crosshair';
     }
 
     $('toolImage').addEventListener('click', () => $('drawImageFile').click());
@@ -4932,20 +5047,8 @@
     $('pickCopy').addEventListener('click', () => duplicatePick());
     $('pickDelete').addEventListener('click', () => deletePick());
     $('toolEraser').addEventListener('click', () => setTool('eraser'));
-    // Fill canvas: colour the whole background with the current colour right away
-    $('toolFill').addEventListener('click', () => {
-        const note = noteById(state.currentNoteId);
-        if (!note || isPrivateLocked(note)) return;
-        if ((note.canvasBackground || DEFAULT_CANVAS_BG) === state.draw.color) return;
-        pushDrawUndo();
-        note.canvasBackground = state.draw.color;
-        touch(note);
-        renderStrokes();
-        renderGrid();
-        const btn = $('toolFill');
-        btn.classList.add('flash');
-        setTimeout(() => btn.classList.remove('flash'), 250);
-    });
+    // Bucket: click an area of the drawing to fill it with the current colour
+    $('toolFill').addEventListener('click', () => setTool('fill'));
 
     $('toolUndo').addEventListener('click', () => {
         let prev = drawUndo.pop();
@@ -5617,15 +5720,48 @@
         const t = document.activeElement && document.activeElement.closest && document.activeElement.closest('input, textarea, select, [contenteditable="true"]');
         return !(t && t.offsetParent !== null);
     }
+    // the selected cells as a picture (PNG), for pasting into the text
+    function gridPickPng(note) {
+        const grid = gridOf(note);
+        const cells = gridCellsOf(note);
+        const list = gridPick.map((id) => grid.byId.get(id)).filter(Boolean);
+        if (!list.length) return null;
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        list.forEach((c) => { x0 = Math.min(x0, c.x0); y0 = Math.min(y0, c.y0); x1 = Math.max(x1, c.x1); y1 = Math.max(y1, c.y1); });
+        const side = Math.min(gridCanvas.width, 1600 / Math.max(x1 - x0, y1 - y0, 0.001));
+        const pad = 6;
+        const out = document.createElement('canvas');
+        out.width = Math.max(1, Math.round((x1 - x0) * side) + 2 * pad);
+        out.height = Math.max(1, Math.round((y1 - y0) * side) + 2 * pad);
+        const g = out.getContext('2d');
+        const bg = note.canvasBackground || DEFAULT_CANVAS_BG;
+        g.fillStyle = bg;
+        g.fillRect(0, 0, out.width, out.height);
+        const v = { g, sx: side, sy: side, ox: pad - x0 * side, oy: pad - y0 * side };
+        g.strokeStyle = gridLineColor(bg);
+        g.lineWidth = Math.max(1, side / 1600);
+        list.forEach((c) => {
+            g.beginPath();
+            tracePoly(c, v);
+            g.fillStyle = cells[c.id] || bg;
+            g.fill();
+            g.stroke();
+        });
+        return out.toDataURL('image/png');
+    }
+
     ['copy', 'cut'].forEach((type) => document.addEventListener(type, (e) => {
         if (!gridPickActive() || gridTool !== 'select' || !gridPick.length) return;
         const note = noteById(state.currentNoteId);
         e.preventDefault();
         const cells = gridCellsOf(note);
         gridClipboard = { key: gridKey(note), cells: gridPick.map((id) => [id, cells[id]]).filter(([, c]) => c) };
-        if (e.clipboardData) e.clipboardData.setData('text/plain', GRID_COPY_MARK);
+        if (e.clipboardData) {
+            e.clipboardData.setData('text/plain', GRID_COPY_MARK);
+            e.clipboardData.setData('text/html', copyImgHtml(gridPickPng(note))); // pastes as a picture in the text
+        }
         if (type === 'cut') deleteGridPick();
-        else toast('Copied — press Ctrl+V, then drag the copy to where you want it');
+        else toast('Copied — Ctrl+V pastes it here (then drag it), or as a picture in the text');
     }));
     document.addEventListener('paste', (e) => {
         if (!gridPickActive() || !gridClipboard) return;
