@@ -1896,8 +1896,8 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .tool-btn.pick-btn { width: auto; padding: 0 9px; white-space: nowrap; font-size: 13px; }
 .tool-btn.pick-btn.danger { color: var(--danger); }
 
-/* the main screen uses 95% of the width on a computer */
-@media (min-width: 761px) { .view { max-width: max(95%, 1200px); } }
+/* the main screen uses 98% of the width on a computer */
+@media (min-width: 761px) { .view { max-width: max(98%, 1200px); } }
 
 /* the Text / Draw / Grid bar moves along at the top; the toolbars stay right below it */
 #viewNote .editor-toolbar {
