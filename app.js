@@ -4562,6 +4562,15 @@
             ctx.fillStyle = 'rgba(124,111,240,.08)';
             ctx.fillRect(box.x0 * W - pad, box.y0 * H - pad, (box.x1 - box.x0) * W + 2 * pad, (box.y1 - box.y0) * H + 2 * pad);
             ctx.strokeRect(box.x0 * W - pad, box.y0 * H - pad, (box.x1 - box.x0) * W + 2 * pad, (box.y1 - box.y0) * H + 2 * pad);
+            // handle at the bottom-right corner: drag it to make the selection bigger / smaller
+            if (!marquee) {
+                const hs = 14 * px, cx = box.x1 * W + pad, cy = box.y1 * H + pad;
+                ctx.setLineDash([]);
+                ctx.fillStyle = '#7c6ff0';
+                ctx.fillRect(cx - hs / 2, cy - hs / 2, hs, hs);
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(cx - hs / 4, cy - hs / 4, hs / 2, hs / 2);
+            }
         }
         if (marquee) {
             ctx.strokeStyle = '#a5b4fc';
@@ -4575,10 +4584,28 @@
         updatePickBar();
     }
 
+    // is the pointer on the resize handle (bottom-right corner of the selection)?
+    function onScaleHandle(pos, box) {
+        if (!box) return false;
+        const cw = canvas.clientWidth || 1, ch = canvas.clientHeight || 1;
+        const cx = box.x1 + 6 / cw, cy = box.y1 + 6 / ch;
+        return Math.abs(pos.x - cx) * cw <= 12 && Math.abs(pos.y - cy) * ch <= 12;
+    }
+
     function startPick(e) {
         const pos = pointerPos(e, true);
         try { canvas.setPointerCapture?.(e.pointerId); } catch (err) { /* ignore */ }
         const box = pickBox();
+        if (onScaleHandle(pos, box)) {
+            // resize: change copies, so Ctrl+Z gets the old size back
+            pushDrawUndo();
+            const copies = new Map(drawPick.map((s) => [s, cloneItem(s)]));
+            state.draw.strokes = state.draw.strokes.map((s) => copies.get(s) || s);
+            drawPick = [...copies.values()];
+            pickDrag = { scale: true, start: pos, box, orig: drawPick.map(cloneItem), moved: false };
+            canvas.style.cursor = 'nwse-resize';
+            return;
+        }
         const pad = 6 / (canvas.clientWidth || 1);
         const inBox = box && pos.x >= box.x0 - pad && pos.x <= box.x1 + pad && pos.y >= box.y0 - pad && pos.y <= box.y1 + pad;
         const hit = inBox ? null : itemAt(pos);
@@ -4601,6 +4628,27 @@
 
     function movePick(e) {
         const pos = pointerPos(e, true);
+        if (pickDrag && pickDrag.scale) {
+            e.preventDefault();
+            const { box, start, orig } = pickDrag;
+            const bw = Math.max(box.x1 - box.x0, 0.001), bh = Math.max(box.y1 - box.y0, 0.001);
+            // same factor for width and height (keeps the shape); never smaller than 3% of the canvas
+            let f = Math.max((bw + pos.x - start.x) / bw, (bh + pos.y - start.y) / bh);
+            f = Math.max(f, 0.03 / Math.max(bw, bh));
+            if (Math.abs(f - 1) > 0.002) pickDrag.moved = true;
+            const ax = box.x0, ay = box.y0; // the top-left corner stays put
+            drawPick.forEach((s, i) => {
+                const o = orig[i];
+                if (s.image) {
+                    s.x = ax + (o.x - ax) * f; s.y = ay + (o.y - ay) * f; s.w = o.w * f; s.h = o.h * f;
+                } else {
+                    s.thicknessRatio = o.thicknessRatio * f;
+                    s.points.forEach((p, j) => { p.x = ax + (o.points[j].x - ax) * f; p.y = ay + (o.points[j].y - ay) * f; });
+                }
+            });
+            renderStrokes();
+            return;
+        }
         if (pickDrag) {
             e.preventDefault();
             const dx = pos.x - pickDrag.start.x, dy = pos.y - pickDrag.start.y;
@@ -4621,6 +4669,7 @@
         }
         // hover: show where you can grab
         const box = pickBox();
+        if (onScaleHandle(pos, box)) { canvas.style.cursor = 'nwse-resize'; return; }
         const inBox = box && pos.x >= box.x0 && pos.x <= box.x1 && pos.y >= box.y0 && pos.y <= box.y1;
         canvas.style.cursor = inBox || itemAt(pos) ? 'move' : 'default';
     }
@@ -5750,12 +5799,50 @@
         return out.toDataURL('image/png');
     }
 
+    // Copied cells from one grid → the cells of another grid (other size, shape or angle).
+    // Each target cell looks at 5 spots (its middle + 4 spots towards its corners) in the copied
+    // part; if at least 2 land on copied cells, it gets the colour that came up most.
+    function resampleGridCells(clip, target) {
+        const src = buildGrid(clip.settings.type, clip.settings.size, clip.settings.rot);
+        const colorOf = new Map(clip.cells);
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        clip.cells.forEach(([id]) => {
+            const c = src.byId.get(id);
+            if (!c) return;
+            x0 = Math.min(x0, c.x0); y0 = Math.min(y0, c.y0); x1 = Math.max(x1, c.x1); y1 = Math.max(y1, c.y1);
+        });
+        if (x0 === Infinity) return [];
+        const out = [];
+        target.cells.forEach((t) => {
+            if (t.x1 < x0 || t.x0 > x1 || t.y1 < y0 || t.y0 > y1) return;
+            const m = cellCenter(t);
+            const spots = [m, ...[0, 1, 2, 3].map((k) => {
+                const v = t.pts[Math.floor(k * t.pts.length / 4)];
+                return { x: m.x + (v[0] - m.x) * 0.5, y: m.y + (v[1] - m.y) * 0.5 };
+            })];
+            const votes = new Map();
+            let hits = 0;
+            spots.forEach((q) => {
+                const c = gridHit(src, q.x, q.y);
+                const col = c && colorOf.get(c.id);
+                if (!col) return;
+                hits++;
+                votes.set(col, (votes.get(col) || 0) + 1);
+            });
+            if (hits < 2) return;
+            let best = null, n = 0;
+            votes.forEach((v, col) => { if (v > n) { n = v; best = col; } });
+            out.push([t.id, best]);
+        });
+        return out;
+    }
+
     ['copy', 'cut'].forEach((type) => document.addEventListener(type, (e) => {
         if (!gridPickActive() || gridTool !== 'select' || !gridPick.length) return;
         const note = noteById(state.currentNoteId);
         e.preventDefault();
         const cells = gridCellsOf(note);
-        gridClipboard = { key: gridKey(note), cells: gridPick.map((id) => [id, cells[id]]).filter(([, c]) => c) };
+        gridClipboard = { key: gridKey(note), settings: gridSettings(note), cells: gridPick.map((id) => [id, cells[id]]).filter(([, c]) => c) };
         if (e.clipboardData) {
             e.clipboardData.setData('text/plain', GRID_COPY_MARK);
             e.clipboardData.setData('text/html', copyImgHtml(gridPickPng(note))); // pastes as a picture in the text
@@ -5770,15 +5857,17 @@
         const note = noteById(state.currentNoteId);
         if (!note || isPrivateLocked(note)) return;
         e.preventDefault();
-        if (gridClipboard.key !== gridKey(note)) { toast('That was copied from another grid shape, size or angle'); return; }
-        // put the copied colours back on their cells, selected and ready to be dragged away
+        // put the copied colours on the cells, selected and ready to be dragged away;
+        // copied from another size / shape / angle: draw it again on this grid's cells
         const key = gridKey(note);
+        const pasted = gridClipboard.key === key ? gridClipboard.cells : resampleGridCells(gridClipboard, gridOf(note));
+        if (!pasted.length) { toast('Nothing to paste: the copied part is too small for this grid'); return; }
         const before = { ...gridCellsOf(note) };
         const cells = { ...before };
-        gridClipboard.cells.forEach(([id, c]) => { cells[id] = c; });
+        pasted.forEach(([id, c]) => { cells[id] = c; });
         note.grids[key] = cells;
         commitGridChange(note, key, before);
-        gridPick = gridClipboard.cells.map(([id]) => id);
+        gridPick = pasted.map(([id]) => id);
         gridCopyMode = true;
         if (gridTool !== 'select') setGridTool('select');
         renderGrid();
