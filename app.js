@@ -1933,6 +1933,23 @@
             markTextChanged();
         }
     });
+    // Download the selected picture (also possible with right-click → Save image as)
+    $('imageDownload').addEventListener('click', () => {
+        if (!selectedImg) return;
+        const src = selectedImg.getAttribute('src') || '';
+        const mime = (/^data:([^;,]+)/.exec(src) || [])[1] || 'image/png';
+        const ext = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp', 'image/gif': 'gif', 'image/svg+xml': 'svg' }[mime] || 'png';
+        const note = noteById(state.currentNoteId);
+        const base = ((note && note.title.trim()) || 'picture').replace(/[\\/:*?"<>|]+/g, '').slice(0, 60) || 'picture';
+        const pics = [...editorEl.querySelectorAll('img')];
+        const n = pics.length > 1 ? `-${pics.indexOf(selectedImg) + 1}` : '';
+        const a = document.createElement('a');
+        a.href = src;
+        a.download = `${base}${n}.${ext}`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+    });
     $('imageRemove').addEventListener('click', () => {
         if (!selectedImg) return;
         selectedImg.remove();
