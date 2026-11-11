@@ -1853,5 +1853,5 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 /* items with a background colour */
 .note-item.has-bg, .folder-header.has-bg { background: var(--item-bg); color: var(--item-fg); }
 .note-item.has-bg .note-item-meta, .folder-header.has-bg .folder-chevron { color: var(--item-dim); }
-.note-item.has-bg:hover, .folder-header.has-bg:hover { background: var(--item-bg); filter: brightness(.94); }
+.note-item.has-bg:hover, .folder-header.has-bg:hover { background: var(--item-bg); filter: brightness(1.25); }
 .note-item.has-bg.active { box-shadow: inset 3px 0 0 var(--primary), 0 0 0 1px var(--primary); }

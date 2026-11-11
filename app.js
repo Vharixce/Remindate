@@ -130,6 +130,7 @@
         folder.name = folder.name || 'Folder';
         folder.modifiedAt = folder.modifiedAt || '2000-01-01T00:00:00.000Z';
         folder.parentId = folder.parentId || null; // null = top level
+        if (folder.bgColor && OLD_BG_COLORS[folder.bgColor]) folder.bgColor = OLD_BG_COLORS[folder.bgColor];
     }
 
     // The folder a folder sits in (null = top level). A missing parent or a loop counts as top level.
@@ -189,6 +190,8 @@
     }
 
     // the pastel colours became 10% less white: update text that used the old ones
+    const OLD_BG_COLORS = { '#ff9494': '#372020', '#ffca8c': '#372b20', '#fcff9c': '#373420', '#b5ffa6': '#203722',
+        '#86b4ff': '#202937', '#c59cff': '#2b2037', '#000000': '#2b2b2b' };
     const OLD_PASTELS = [[/#ffadad|rgb\(255,\s*173,\s*173\)/gi, '#ff9494'], [/#ffd6a5|rgb\(255,\s*214,\s*165\)/gi, '#ffca8c'], [/#fdffb6|rgb\(253,\s*255,\s*182\)/gi, '#fcff9c'], [/#caffbf|rgb\(202,\s*255,\s*191\)/gi, '#b5ffa6'], [/#a0c4ff|rgb\(160,\s*196,\s*255\)/gi, '#86b4ff'], [/#d4b5ff|rgb\(212,\s*181,\s*255\)/gi, '#c59cff']];
     function migrateNote(note) {
         note.id = note.id || uid();
@@ -199,6 +202,7 @@
         note.scheduledAt = note.scheduledAt || null;
         note.folderId = note.folderId || null;
         if (note.color === OLD_BRIGHT_RED) note.color = NEW_BRIGHT_RED;
+        if (note.bgColor && OLD_BG_COLORS[note.bgColor]) note.bgColor = OLD_BG_COLORS[note.bgColor];
         if (typeof note.html === 'string' && /#(ffadad|ffd6a5|fdffb6|caffbf|a0c4ff|d4b5ff)|rgb\(\s*(255,\s*173|255,\s*214|253,\s*255|202,\s*255|160,\s*196|212,\s*181)/i.test(note.html)) {
             OLD_PASTELS.forEach(([re, color]) => { note.html = note.html.replace(re, color); });
         }
@@ -590,6 +594,15 @@
         showActionSheet(`Move "${folder.name}" to`, options);
     }
     /* ---------- ☰ menus in the explorer ---------- */
+    // Background colours for folders / notes: dark and greyish so they blend with the dark theme
+    // (same lightness and greyness for every colour, red ≈ #361F1F)
+    const BG_COLORS = [
+        ['', 'No colour'],
+        ['#372020', 'Red'], ['#372b20', 'Orange'], ['#373420', 'Yellow'],
+        ['#203722', 'Green'], ['#202937', 'Blue'], ['#2b2037', 'Purple'],
+        ['#2b2b2b', 'Grey']
+    ];
+
     // background colour of a tree item; dark text on light colours, light text on dark ones
     function bgStyle(color) {
         const r = parseInt(color.slice(1, 3), 16), g = parseInt(color.slice(3, 5), 16), b = parseInt(color.slice(5, 7), 16);
@@ -647,7 +660,7 @@
     function pickBgColor(anchor, current, onPick) {
         closeMenu();
         menuActions = [];
-        menuEl.innerHTML = `<div class="tree-menu-title">Background colour</div><div class="tree-menu-colors">${TEXT_COLORS.map(([c, name]) =>
+        menuEl.innerHTML = `<div class="tree-menu-title">Background colour</div><div class="tree-menu-colors">${BG_COLORS.map(([c, name]) =>
             `<button type="button" class="text-color${c ? '' : ' reset'}${(current || '') === c ? ' selected' : ''}" data-bg="${c}" title="${c ? name : 'No colour'}" aria-label="${c ? name : 'No colour'}" style="${c ? `background:${c}` : ''}">${c ? '' : '∅'}</button>`).join('')}</div>`;
         menuEl._onPick = onPick;
         menuEl.hidden = false;
