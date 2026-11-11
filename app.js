@@ -1890,7 +1890,30 @@
         });
         return out;
     }
-    // Where a picture lands: between two lines, the one nearest to the pointer
+    // a line with only pictures in it (pictures can stand side by side there)
+    function isPictureLine(n) {
+        return !!n && n.nodeType === 1 && n.nodeName === 'DIV' && !!n.querySelector(':scope > img')
+            && [...n.childNodes].every((c) => c.nodeName === 'IMG' || c.nodeName === 'BR' || (c.nodeType === 3 && !c.textContent.trim()));
+    }
+    // Over a picture line: next to a picture in that line (left or right of it, by the pointer)
+    function sideBySidePoint(x, y) {
+        for (const b of textBlocks()) {
+            if (y < b.rect.top || y > b.rect.bottom || !isPictureLine(b.node)) continue;
+            const imgs = [...b.node.querySelectorAll(':scope > img')];
+            const rects = imgs.map((i) => i.getBoundingClientRect());
+            const last = rects[rects.length - 1];
+            // only when the pointer is on (or just right of) the pictures, not far away in the empty part
+            if (x > last.right + last.width * 0.6) return null;
+            const i = rects.findIndex((r) => x < r.left + r.width / 2);
+            return {
+                inline: true, line: b.node, beforeImg: i < 0 ? null : imgs[i],
+                x: i < 0 ? last.right + 6 : rects[i].left - 3, y: b.rect.top, h: Math.max(...rects.map((r) => r.height))
+            };
+        }
+        return null;
+    }
+    // Where a picture lands: next to another picture, or between two lines (the nearest one)
+    function dropTarget(x, y) { return sideBySidePoint(x, y) || dropPoint(y); }
     function dropPoint(y) {
         const blocks = textBlocks();
         for (const b of blocks) {
@@ -1931,6 +1954,14 @@
         }
     }
 
+    // put a picture into a picture line, before `beforeImg` (or at the end)
+    function placeInline(img, point) {
+        const old = img.parentNode;
+        point.line.insertBefore(img, point.beforeImg && point.beforeImg.parentNode === point.line ? point.beforeImg : null);
+        // the line it came from is now empty: remove it
+        if (old && old !== point.line && old.parentNode === editorEl && !old.querySelector('img') && !old.textContent.trim()) old.remove();
+    }
+
     let insertingImages = false;
     async function insertImageFiles(files, point) {
         if (!noteById(state.currentNoteId)) return;
@@ -1944,8 +1975,15 @@
             for (const file of images) {
                 try {
                     const line = pictureLine(await imageFileToDataUrl(file));
-                    placeLine(line, at);
-                    lastImg = line.querySelector('img');
+                    if (at.inline) {
+                        const img = line.querySelector('img');
+                        placeInline(img, at); // next to the other picture(s)
+                        at.beforeImg = img.nextSibling && img.nextSibling.nodeName === 'IMG' ? img.nextSibling : null;
+                        lastImg = img;
+                    } else {
+                        placeLine(line, at);
+                        lastImg = line.querySelector('img');
+                    }
                 } catch (err) {
                     toast(`Could not load image: ${file.name}`);
                 }
@@ -1975,15 +2013,25 @@
     dropOutline.className = 'drop-outline';
     dropOutline.hidden = true;
     document.body.appendChild(dropOutline);
-    function showDropOutline(point, aspect) {
+    function showDropOutline(point, aspect, widthPct) {
         const er = editorEl.getBoundingClientRect();
         const cs = getComputedStyle(editorEl);
         const left = er.left + parseFloat(cs.paddingLeft || 0);
-        const width = (er.width - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0)) * 0.25;
-        dropOutline.style.left = `${left}px`;
-        dropOutline.style.top = `${point.y + 2}px`;
-        dropOutline.style.width = `${width}px`;
-        dropOutline.style.height = `${Math.max(24, width * (aspect || 0.66))}px`;
+        const width = (er.width - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0)) * (widthPct || 25) / 100;
+        const height = Math.max(24, width * (aspect || 0.66));
+        dropOutline.classList.toggle('inline', !!point.inline);
+        if (point.inline) {
+            // a thin box next to the picture: "it goes here, on the same line"
+            dropOutline.style.left = `${point.x - 3}px`;
+            dropOutline.style.top = `${point.y}px`;
+            dropOutline.style.width = `${Math.min(width, 40)}px`;
+            dropOutline.style.height = `${point.h || height}px`;
+        } else {
+            dropOutline.style.left = `${left}px`;
+            dropOutline.style.top = `${point.y + 2}px`;
+            dropOutline.style.width = `${width}px`;
+            dropOutline.style.height = `${height}px`;
+        }
         dropOutline.hidden = false;
     }
     const hideDropOutline = () => { dropOutline.hidden = true; };
@@ -2035,7 +2083,8 @@
         if (!movingNoteImg && !Array.from(e.dataTransfer.types || []).includes('Files')) return;
         e.preventDefault();
         const aspect = movingNoteImg && movingNoteImg.naturalWidth ? movingNoteImg.naturalHeight / movingNoteImg.naturalWidth : 0.66;
-        showDropOutline(dropPoint(e.clientY), aspect);
+        const pct = movingNoteImg ? parseFloat(movingNoteImg.style.width) || 25 : 25;
+        showDropOutline(dropTarget(e.clientX, e.clientY), aspect, pct);
     });
     editorEl.addEventListener('dragleave', (e) => {
         if (!e.relatedTarget || !editorEl.contains(e.relatedTarget)) hideDropOutline();
@@ -2059,7 +2108,15 @@
             e.preventDefault();
             hideDropOutline();
             if (!editorEl.contains(img)) return;
-            const point = dropPoint(e.clientY);
+            const point = dropTarget(e.clientX, e.clientY);
+            if (point.inline) {
+                if (point.beforeImg === img || (point.line === img.parentNode && point.beforeImg === img.nextSibling)) return; // same place
+                recordText();
+                placeInline(img, point);
+                selectImage(img);
+                markTextChanged();
+                return;
+            }
             // the picture's own line moves along (one node, so never a copy)
             let line = img.parentNode;
             const alone = line && line.parentNode === editorEl && line.nodeName === 'DIV'
@@ -2078,7 +2135,7 @@
         e.preventDefault();
         e.stopPropagation();
         hideDropOutline();
-        if (files.length) insertImageFiles(files, dropPoint(e.clientY));
+        if (files.length) insertImageFiles(files, dropTarget(e.clientX, e.clientY));
         if (audio.length) { placeCaretAtPoint(e.clientX, e.clientY); insertAudioFiles(audio); }
     });
 
@@ -2164,6 +2221,30 @@
         document.body.appendChild(a);
         a.click();
         a.remove();
+    });
+    // put the selected picture next to the picture(s) on the line above it
+    $('imageSideBySide').addEventListener('click', () => {
+        if (!selectedImg) return;
+        const line = selectedImg.parentNode;
+        let prev = line && line.parentNode === editorEl ? line.previousSibling : null;
+        while (prev && prev.nodeType === 3 && !prev.textContent.trim()) prev = prev.previousSibling;
+        if (!isPictureLine(prev)) { toast('There is no picture on the line above to put it next to'); return; }
+        placeInline(selectedImg, { line: prev, beforeImg: null });
+        selectImage(selectedImg);
+        markTextChanged();
+    });
+    // put the selected picture on a line of its own (below the line it is on now)
+    $('imageOwnLine').addEventListener('click', () => {
+        if (!selectedImg) return;
+        const line = selectedImg.parentNode;
+        if (!line || line.parentNode !== editorEl) return;
+        if (isPictureLine(line) && line.querySelectorAll(':scope > img').length === 1) { toast('This picture already has its own line'); return; }
+        const own = document.createElement('div');
+        editorEl.insertBefore(own, line.nextSibling);
+        own.appendChild(selectedImg);
+        if (!line.querySelector('img') && !line.textContent.trim()) line.remove();
+        selectImage(selectedImg);
+        markTextChanged();
     });
     $('imageRemove').addEventListener('click', () => {
         if (!selectedImg) return;
