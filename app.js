@@ -1188,6 +1188,7 @@
         updatePrivateBtn(note);
         stopVoicePlayback();
         editorEl.innerHTML = sanitizeHtml(note.html);   // (also turns web addresses into links)
+        resetTextHistory();
         decorateVoiceChips();
         $('gridType').value = currentGridType(note);
         updateGridControls(note);
@@ -1543,7 +1544,98 @@
     function markTextChanged() {
         textDirty = true;
         queueSave();
+        updateTextUndoButtons();
     }
+
+    /* ---------------- undo / redo in the text ----------------
+     * Our own history (the browser's undo can't undo pictures that were added, moved
+     * or removed). Typing is grouped per word / pause; every button action is one step. */
+    let textUndo = [], textRedo = [];
+    let lastTypeAt = 0, lastTypeKind = '';
+    function caretOffset() {
+        const sel = window.getSelection();
+        if (!sel.rangeCount || !editorEl.contains(sel.anchorNode)) return null;
+        const r = document.createRange();
+        r.selectNodeContents(editorEl);
+        r.setEnd(sel.anchorNode, sel.anchorOffset);
+        return r.toString().length;
+    }
+    function setCaretOffset(n) {
+        if (n === null || n === undefined) return;
+        const walker = document.createTreeWalker(editorEl, NodeFilter.SHOW_TEXT);
+        let node, left = n;
+        while ((node = walker.nextNode())) {
+            if (left <= node.length) {
+                const r = document.createRange();
+                r.setStart(node, left);
+                r.collapse(true);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(r);
+                return;
+            }
+            left -= node.length;
+        }
+    }
+    const textSnap = () => ({ html: editorEl.innerHTML, caret: caretOffset() });
+    // call BEFORE changing the text
+    function recordText() {
+        if (!noteById(state.currentNoteId)) return;
+        const snap = textSnap();
+        const top = textUndo[textUndo.length - 1];
+        if (top && top.html === snap.html) return;
+        textUndo.push(snap);
+        if (textUndo.length > 200) textUndo.shift();
+        textRedo = [];
+        updateTextUndoButtons();
+    }
+    function applyTextSnap(snap) {
+        editorEl.innerHTML = snap.html;
+        decorateVoiceChips();
+        selectImage(null);
+        editorEl.focus({ preventScroll: true });
+        setCaretOffset(snap.caret);
+        lastTypeKind = '';
+        markTextChanged();
+    }
+    function undoText() {
+        const prev = textUndo.pop();
+        if (!prev) return;
+        textRedo.push(textSnap());
+        applyTextSnap(prev);
+    }
+    function redoText() {
+        const next = textRedo.pop();
+        if (!next) return;
+        textUndo.push(textSnap());
+        applyTextSnap(next);
+    }
+    function resetTextHistory() { textUndo = []; textRedo = []; lastTypeKind = ''; updateTextUndoButtons(); }
+    function updateTextUndoButtons() {
+        if (!$('textUndo')) return;
+        $('textUndo').disabled = !textUndo.length;
+        $('textRedo').disabled = !textRedo.length;
+    }
+    editorEl.addEventListener('beforeinput', (e) => {
+        if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
+            e.preventDefault();
+            if (e.inputType === 'historyUndo') undoText(); else redoText();
+            return;
+        }
+        // a new step when you start deleting after typing (or the other way round),
+        // after a pause, at a new word or a new line
+        const kind = e.inputType.startsWith('delete') ? 'delete' : e.inputType === 'insertText' ? 'type' : e.inputType;
+        const now = Date.now();
+        if (kind !== lastTypeKind || now - lastTypeAt > 1500 || e.data === ' ' || kind === 'insertParagraph') recordText();
+        lastTypeAt = now;
+        lastTypeKind = kind;
+    });
+    editorEl.addEventListener('keydown', (e) => {
+        if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+        const key = e.key.toLowerCase();
+        if (key === 'z' && !e.shiftKey) { e.preventDefault(); undoText(); }
+        else if (key === 'y' || (key === 'z' && e.shiftKey)) { e.preventDefault(); redoText(); }
+    });
 
     editorEl.addEventListener('input', markTextChanged);
 
@@ -1786,28 +1878,115 @@
         sel.addRange(range);
     }
 
-    async function insertImageFiles(files) {
+    // The top-level lines (blocks) of the text, with where they are on screen
+    function textBlocks() {
+        const out = [];
+        editorEl.childNodes.forEach((n) => {
+            if (n.nodeType === 3 && !n.textContent.trim()) return;
+            let rect;
+            if (n.nodeType === 1) rect = n.getBoundingClientRect();
+            else { const r = document.createRange(); r.selectNodeContents(n); rect = r.getBoundingClientRect(); }
+            if (rect.height || rect.width) out.push({ node: n, rect });
+        });
+        return out;
+    }
+    // Where a picture lands: between two lines, the one nearest to the pointer
+    function dropPoint(y) {
+        const blocks = textBlocks();
+        for (const b of blocks) {
+            if (y < b.rect.top + b.rect.height / 2) return { before: b.node, y: b.rect.top };
+        }
+        const last = blocks[blocks.length - 1];
+        const er = editorEl.getBoundingClientRect();
+        return { before: null, y: last ? last.rect.bottom : er.top + parseFloat(getComputedStyle(editorEl).paddingTop || 0) };
+    }
+    // Where a picture added with the button / Ctrl+V goes: after the line with the caret
+    function caretPoint() {
+        const sel = window.getSelection();
+        if (!sel.rangeCount || !editorEl.contains(sel.anchorNode)) return { before: null };
+        let n = sel.anchorNode;
+        if (n === editorEl) return { before: editorEl.childNodes[sel.anchorOffset] || null };
+        while (n.parentNode !== editorEl) n = n.parentNode;
+        // an empty line: put the picture there (before it), so you keep typing below it
+        if (n.nodeType === 1 && !n.textContent.trim() && !n.querySelector('img, audio, [data-voice]')) return { before: n };
+        return { before: n.nextSibling };
+    }
+    function pictureLine(src) {
+        const line = document.createElement('div');
+        const img = document.createElement('img');
+        img.src = src;
+        img.alt = '';
+        img.style.width = '25%'; // new pictures start at size M
+        line.appendChild(img);
+        return line;
+    }
+    // put a line in the text; there is always an empty line after the last picture to type in
+    function placeLine(line, point) {
+        const before = point.before && point.before.parentNode === editorEl ? point.before : null;
+        editorEl.insertBefore(line, before);
+        if (!line.nextSibling) {
+            const blank = document.createElement('div');
+            blank.appendChild(document.createElement('br'));
+            editorEl.appendChild(blank);
+        }
+    }
+
+    let insertingImages = false;
+    async function insertImageFiles(files, point) {
         if (!noteById(state.currentNoteId)) return;
         const images = [...files].filter((f) => f.type.startsWith('image/'));
-        if (!images.length) return;
-        for (const file of images) {
-            try {
-                const src = await imageFileToDataUrl(file);
-                ensureCaretInEditor();
-                // the image gets its own line, and you continue typing below it
-                const ok = document.execCommand('insertHTML', false, `<div><img src="${src}" alt=""></div><div><br></div>`);
-                if (!ok) {
-                    const img = document.createElement('img');
-                    img.src = src;
-                    insertNodeAtCaret(img);
+        if (!images.length || insertingImages) return;
+        insertingImages = true; // never handle the same drop / paste twice
+        recordText();
+        const at = point || caretPoint();
+        let lastImg = null;
+        try {
+            for (const file of images) {
+                try {
+                    const line = pictureLine(await imageFileToDataUrl(file));
+                    placeLine(line, at);
+                    lastImg = line.querySelector('img');
+                } catch (err) {
+                    toast(`Could not load image: ${file.name}`);
                 }
-            } catch (err) {
-                toast(`Could not load image: ${file.name}`);
+            }
+        } finally {
+            insertingImages = false;
+        }
+        if (lastImg) {
+            // caret on the line after the picture
+            const next = lastImg.parentNode.nextSibling;
+            if (next) {
+                const r = document.createRange();
+                r.selectNodeContents(next);
+                r.collapse(true);
+                const sel = window.getSelection();
+                sel.removeAllRanges();
+                sel.addRange(r);
             }
         }
         textDirty = true;
         flushEditor();
+        updateTextUndoButtons();
     }
+
+    // dashed outline showing where a dragged picture will land
+    const dropOutline = document.createElement('div');
+    dropOutline.className = 'drop-outline';
+    dropOutline.hidden = true;
+    document.body.appendChild(dropOutline);
+    function showDropOutline(point, aspect) {
+        const er = editorEl.getBoundingClientRect();
+        const cs = getComputedStyle(editorEl);
+        const left = er.left + parseFloat(cs.paddingLeft || 0);
+        const width = (er.width - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0)) * 0.25;
+        dropOutline.style.left = `${left}px`;
+        dropOutline.style.top = `${point.y + 2}px`;
+        dropOutline.style.width = `${width}px`;
+        dropOutline.style.height = `${Math.max(24, width * (aspect || 0.66))}px`;
+        dropOutline.hidden = false;
+    }
+    const hideDropOutline = () => { dropOutline.hidden = true; };
 
     // Ctrl+C on a clicked picture copies the picture (also when no text is selected)
     editorEl.addEventListener('copy', (e) => {
@@ -1853,8 +2032,16 @@
         (typeof draggedCalendarNote !== 'undefined' && draggedCalendarNote));
     editorEl.addEventListener('dragover', (e) => {
         if (draggingAppItem()) { e.dataTransfer.dropEffect = 'none'; return; }
-        if (Array.from(e.dataTransfer.types || []).includes('Files')) e.preventDefault();
+        if (!movingNoteImg && !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+        e.preventDefault();
+        const aspect = movingNoteImg && movingNoteImg.naturalWidth ? movingNoteImg.naturalHeight / movingNoteImg.naturalWidth : 0.66;
+        showDropOutline(dropPoint(e.clientY), aspect);
     });
+    editorEl.addEventListener('dragleave', (e) => {
+        if (!e.relatedTarget || !editorEl.contains(e.relatedTarget)) hideDropOutline();
+    });
+    document.addEventListener('dragend', hideDropOutline);
+    document.addEventListener('drop', hideDropOutline, true);
     // Dragging a picture that is already in the note: Chrome also hands it over as a "file",
     // which used to add a second copy. Remember the picture and just move it instead.
     let movingNoteImg = null;
@@ -1862,7 +2049,7 @@
         const img = e.target && e.target.closest && e.target.closest('img');
         movingNoteImg = img && editorEl.contains(img) ? img : null;
     });
-    editorEl.addEventListener('dragend', () => { movingNoteImg = null; });
+    editorEl.addEventListener('dragend', () => { movingNoteImg = null; hideDropOutline(); });
 
     editorEl.addEventListener('drop', (e) => {
         if (draggingAppItem()) { e.preventDefault(); return; }
@@ -1870,30 +2057,29 @@
             const img = movingNoteImg;
             movingNoteImg = null;
             e.preventDefault();
+            hideDropOutline();
             if (!editorEl.contains(img)) return;
-            placeCaretAtPoint(e.clientX, e.clientY);
-            const sel = window.getSelection();
-            if (sel.rangeCount && editorEl.contains(sel.anchorNode) && !img.contains(sel.anchorNode)) {
-                const range = sel.getRangeAt(0);
-                range.collapse(true);
-                range.insertNode(img); // moves the picture (one node, so never a copy)
-                range.setStartAfter(img);
-                range.collapse(true);
-                sel.removeAllRanges();
-                sel.addRange(range);
-            }
+            const point = dropPoint(e.clientY);
+            // the picture's own line moves along (one node, so never a copy)
+            let line = img.parentNode;
+            const alone = line && line.parentNode === editorEl && line.nodeName === 'DIV'
+                && [...line.childNodes].every((n) => n === img || (n.nodeType === 3 && !n.textContent.trim()) || n.nodeName === 'BR');
+            if (point.before === line || (alone && point.before === line.nextSibling)) return; // same place
+            recordText();
+            if (!alone) { line = document.createElement('div'); line.appendChild(img); }
+            placeLine(line, point);
             selectImage(img);
-            textDirty = true;
-            queueSave();
+            markTextChanged();
             return;
         }
         const files = [...(e.dataTransfer.files || [])].filter((f) => f.type.startsWith('image/'));
         const audio = [...(e.dataTransfer.files || [])].filter((f) => f.type.startsWith('audio/'));
         if (!files.length && !audio.length) return;
         e.preventDefault();
-        placeCaretAtPoint(e.clientX, e.clientY);
-        if (files.length) insertImageFiles(files);
-        if (audio.length) insertAudioFiles(audio);
+        e.stopPropagation();
+        hideDropOutline();
+        if (files.length) insertImageFiles(files, dropPoint(e.clientY));
+        if (audio.length) { placeCaretAtPoint(e.clientX, e.clientY); insertAudioFiles(audio); }
     });
 
     function selectImage(img) {
@@ -1940,6 +2126,12 @@
     $('textToolbar').addEventListener('mousedown', (e) => {
         if (e.target.closest('button')) e.preventDefault();
     });
+    $('textToolbar').addEventListener('click', (e) => {
+        const b = e.target.closest('button');
+        if (b && b.id !== 'textUndo' && b.id !== 'textRedo') recordText();
+    }, true);
+    $('textUndo').addEventListener('click', undoText);
+    $('textRedo').addEventListener('click', redoText);
     $('textToolbar').addEventListener('click', (e) => {
         const cmd = e.target.closest('[data-cmd]');
         if (cmd) {

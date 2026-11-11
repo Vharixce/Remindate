@@ -1910,3 +1910,17 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
     #textToolbar, #drawToolbar, #gridToolbar { top: calc(var(--modebar-h, 48px) - 12px); }
 }
 .tool-btn.flash { background: rgba(124,111,240,.35); border-color: var(--primary); }
+
+/* the main screen: 99% of the width next to the sidebar, on every screen size */
+.content { padding-left: 0.5%; padding-right: 0.5%; }
+@media (min-width: 761px) { .view { max-width: 100%; } }
+@media (max-width: 760px) { .content { padding-left: 0.5%; padding-right: 0.5%; } }
+
+/* where a dragged picture will land */
+.drop-outline {
+    position: fixed; z-index: 150; pointer-events: none;
+    border: 2px dashed var(--primary); border-radius: 6px; background: rgba(124,111,240,.12);
+    box-shadow: 0 -3px 0 -1px var(--primary);
+}
+.drop-outline[hidden] { display: none; }
+#textUndo:disabled, #textRedo:disabled { opacity: .35; cursor: default; }
