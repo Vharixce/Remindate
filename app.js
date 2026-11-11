@@ -3052,7 +3052,10 @@
         { code: 'FR', label: 'French', short: 'FR' },
         { code: 'SE', label: 'Swedish', short: 'SE' },
         { code: 'DE', label: 'German', short: 'DE' },
-        { code: 'JP', label: 'Japanese', short: 'JP' }
+        { code: 'JP', label: 'Japanese', short: 'JP' },
+        { code: 'US', label: 'American', short: 'US' },
+        { code: 'CN', label: 'Chinese', short: 'CN' },
+        { code: 'IN', label: 'Indian', short: 'IN' }
     ];
 
     /* ---------------- astronomy (all calculated, no internet needed) ----------------
@@ -3223,6 +3226,202 @@
         return out;
     }
 
+    /* ---------------- Indian (Hindu) festivals: calculated like a panchang ----------------
+     * tithi (lunar day) = angle between Moon and Sun / 12°; lunar month (amanta) from the
+     * sidereal sign of the Sun at the new moon that starts it. Reference place: New Delhi (IST). */
+    const DELHI = { lat: 28.61, lon: 77.21 };
+    const MOON_TERMS = [ // D, M, M', F, coefficient (1e-6 degree)
+        [0, 0, 1, 0, 6288774], [2, 0, -1, 0, 1274027], [2, 0, 0, 0, 658314], [0, 0, 2, 0, 213618],
+        [0, 1, 0, 0, -185116], [0, 0, 0, 2, -114332], [2, 0, -2, 0, 58793], [2, -1, -1, 0, 57066],
+        [2, 0, 1, 0, 53322], [2, -1, 0, 0, 45758], [0, 1, -1, 0, -40923], [1, 0, 0, 0, -34720],
+        [0, 1, 1, 0, -30383], [2, 0, 0, -2, 15327], [0, 0, 1, 2, -12528], [0, 0, 1, -2, 10980],
+        [4, 0, -1, 0, 10675], [0, 0, 3, 0, 10034], [4, 0, -2, 0, 8548], [2, 1, -1, 0, -7888],
+        [2, 1, 0, 0, -6766], [1, 0, -1, 0, -5163], [1, 1, 0, 0, 4987], [2, -1, 1, 0, 4036],
+        [2, 0, 2, 0, 3994], [4, 0, 0, 0, 3861], [2, 0, -3, 0, 3665], [0, 1, -2, 0, -2689],
+        [2, 0, -1, 2, -2602], [2, -1, -2, 0, 2390], [1, 0, 1, 0, -2348], [2, -2, 0, 0, 2236],
+        [0, 1, 2, 0, -2120], [0, 2, 0, 0, -2069], [2, -2, -1, 0, 2048], [2, 0, 1, -2, -1773],
+        [2, 0, 0, 2, -1595], [4, -1, -1, 0, 1215], [0, 0, 2, 2, -1110], [3, 0, -1, 0, -892],
+        [2, 1, 1, 0, -810], [4, -1, -2, 0, 759], [0, 2, -1, 0, -713], [2, 2, -1, 0, -700]
+    ];
+    const norm360 = (a) => ((a % 360) + 360) % 360;
+    const centuries = (date) => (date.getTime() / 86400000 + 2440587.5 + 69 / 86400 - 2451545.0) / 36525;
+    function sunLongitude(date) {
+        const T = centuries(date);
+        const L0 = 280.46646 + 36000.76983 * T + 0.0003032 * T * T;
+        const M = 357.52911 + 35999.05029 * T - 0.0001537 * T * T;
+        const C = (1.914602 - 0.004817 * T) * sinD(M) + (0.019993 - 0.000101 * T) * sinD(2 * M) + 0.000289 * sinD(3 * M);
+        return norm360(L0 + C - 0.00569);
+    }
+    function moonLongitude(date) {
+        const T = centuries(date);
+        const Lp = 218.3164477 + 481267.88123421 * T - 0.0015786 * T * T + T ** 3 / 538841;
+        const Dm = 297.8501921 + 445267.1114034 * T - 0.0018819 * T * T + T ** 3 / 545868;
+        const M = 357.5291092 + 35999.0502909 * T - 0.0001536 * T * T;
+        const Mp = 134.9633964 + 477198.8675055 * T + 0.0087414 * T * T + T ** 3 / 69699;
+        const F = 93.2720950 + 483202.0175233 * T - 0.0036539 * T * T;
+        const E = 1 - 0.002516 * T - 0.0000074 * T * T;
+        let sum = 0;
+        MOON_TERMS.forEach(([d, m, mp, f, c]) => { sum += c * E ** Math.abs(m) * sinD(d * Dm + m * M + mp * Mp + f * F); });
+        sum += 3958 * sinD(119.75 + 131.849 * T) + 1962 * sinD(Lp - F) + 318 * sinD(53.09 + 479264.29 * T);
+        return norm360(Lp + sum / 1e6);
+    }
+    // tithi 1..30 (1–15 bright half, 16–30 dark half, 30 = new moon day)
+    const tithiAt = (date) => Math.floor(norm360(moonLongitude(date) - sunLongitude(date)) / 12) + 1;
+    const ayanamsa = (date) => 23.853 + 0.013968 * (date.getUTCFullYear() + date.getUTCMonth() / 12 - 2000);
+    const siderealSign = (date) => Math.floor(norm360(sunLongitude(date) - ayanamsa(date)) / 30); // 0 = Mesha
+    const newMoonMoment = (k) => jdToDate(lunation(k).jde);
+    // lunar month (amanta) at a moment: 0 Chaitra … 11 Phalguna; leap = adhika (extra) month
+    function lunarMonthAt(date) {
+        let k = Math.floor((date.getTime() / 86400000 - 10957.75) / 29.530588861) + 1; // rough index from 2000
+        while (newMoonMoment(k) > date) k--;
+        while (newMoonMoment(k + 1) <= date) k++;
+        const s0 = siderealSign(newMoonMoment(k)), s1 = siderealSign(newMoonMoment(k + 1));
+        return { month: (s0 + 1) % 12, leap: s0 === s1 };
+    }
+    // the IST day (y, m, d) on which `tithi` in lunar `month` holds at the reference moment of that day
+    const IST = 330; // minutes
+    function istDay(y, m, d) { return new Date(Date.UTC(y, m - 1, d) - IST * 60000); } // 00:00 IST
+    function refMoment(y, m, d, when) {
+        const sun = sunTimes(DELHI.lat, DELHI.lon, y, m, d);
+        const len = sun.set - sun.rise;
+        switch (when) {
+            case 'sunrise': return new Date(sun.rise.getTime() + 60000);
+            case 'midday': return new Date(sun.rise.getTime() + len / 2);               // madhyahna
+            case 'afternoon': return new Date(sun.rise.getTime() + len * 0.7);          // aparahna
+            case 'evening': return new Date(sun.set.getTime() + 45 * 60000);            // pradosh
+            case 'midnight': return new Date(istDay(y, m, d).getTime() + 24 * 3600000 + 5 * 60000); // nishita
+            default: return sun.rise;
+        }
+    }
+    const elongationAt = (date) => norm360(moonLongitude(date) - sunLongitude(date));
+    // full moon day where the full moon still holds 2.4 h (3 muhurtas) after sunrise;
+    // otherwise the day before (used for Raksha Bandhan)
+    function purnimaUdaya(month, from, to) {
+        for (let t = from.getTime(); t <= to.getTime(); t += 86400000) {
+            const g = new Date(t);
+            const yy = g.getFullYear(), mm = g.getMonth() + 1, dd = g.getDate();
+            const rise = sunTimes(DELHI.lat, DELHI.lon, yy, mm, dd).rise;
+            const at = new Date(rise.getTime() + 144 * 60000);
+            if (tithiAt(at) === 15) { const lm = lunarMonthAt(at); if (lm.month === month && !lm.leap) return D(yy, mm, dd); continue; }
+            const aft = refMoment(yy, mm, dd, 'afternoon');
+            const nRise = sunTimes(DELHI.lat, DELHI.lon, yy, mm, dd + 1).rise;
+            if (tithiAt(aft) === 15 && tithiAt(new Date(nRise.getTime() + 144 * 60000)) !== 15) {
+                const lm = lunarMonthAt(aft); if (lm.month === month && !lm.leap) return D(yy, mm, dd);
+            }
+        }
+        return null;
+    }
+    // Holika Dahan: full moon in the evening, but not during Bhadra (the first half of the full-moon tithi).
+    // If Bhadra only ends after midnight, the bonfire moves to the next evening.
+    function holikaDahan(from, to) {
+        const day = festivalDay(null, 11, 15, 'evening', from, to);
+        if (!day) return null;
+        const y = day.getFullYear(), m = day.getMonth() + 1, d = day.getDate();
+        const ev = refMoment(y, m, d, 'evening');
+        const e = elongationAt(ev);
+        if (e >= 174) return day; // Bhadra is already over
+        const rate = (elongationAt(new Date(ev.getTime() + 3600000)) - e) || 0.5; // degrees per hour
+        const bhadraEnd = new Date(ev.getTime() + ((174 - e) / rate) * 3600000);
+        const midnight = new Date(istDay(y, m, d).getTime() + 24 * 3600000);
+        if (bhadraEnd <= midnight) return day; // bonfire later that same night
+        // Bhadra lasts past midnight: the next evening, if the full moon lasts until about sunset that day
+        const next = addDays(day, 1);
+        const nSet = sunTimes(DELHI.lat, DELHI.lon, next.getFullYear(), next.getMonth() + 1, next.getDate()).set;
+        return tithiAt(new Date(nSet.getTime() - 2 * 3600000)) === 15 ? next : day;
+    }
+
+    function festivalDay(y, month, tithi, when, from, to) {
+        for (let t = from.getTime(); t <= to.getTime(); t += 86400000) {
+            const g = new Date(t);
+            const yy = g.getFullYear(), mm = g.getMonth() + 1, dd = g.getDate();
+            const at = refMoment(yy, mm, dd, when);
+            if (tithiAt(at) !== tithi) continue;
+            const lm = lunarMonthAt(at);
+            if (lm.month === month && !lm.leap) return D(yy, mm, dd);
+        }
+        return null;
+    }
+    // [name, lunar month, tithi, when, search window (month, day) → (month, day)]
+    const HINDU_FESTIVALS = [
+        ['Maha Shivaratri', 10, 29, 'midnight', [2, 1], [3, 20]],
+        ['Holika Dahan', 11, 15, 'evening', [2, 20], [4, 5]],
+        ['Ram Navami', 0, 9, 'midday', [3, 15], [4, 30]],
+        ['Raksha Bandhan', 4, 15, 'afternoon', [7, 20], [9, 5]],
+        ['Krishna Janmashtami', 4, 23, 'midnight', [8, 5], [9, 15]],
+        ['Ganesh Chaturthi', 5, 4, 'midday', [8, 15], [9, 30]],
+        ['Navratri begins', 6, 1, 'sunrise', [9, 15], [10, 31]],
+        ['Dussehra', 6, 10, 'afternoon', [9, 25], [11, 5]],
+        ['Diwali', 6, 30, 'evening', [10, 10], [11, 20]]
+    ];
+    const hinduCache = new Map();
+    function hinduFestivals(y) {
+        if (hinduCache.has(y)) return hinduCache.get(y);
+        const out = [];
+        HINDU_FESTIVALS.forEach(([name, month, tithi, when, a, b]) => {
+            const from = D(y, a[0], a[1]), to = D(y, b[0], b[1]);
+            const day = name === 'Holika Dahan' ? holikaDahan(from, to)
+                : name === 'Raksha Bandhan' ? purnimaUdaya(month, from, to)
+                    : festivalDay(y, month, tithi, when, from, to);
+            if (!day) return;
+            if (name === 'Holika Dahan') { out.push([day, 'Holika Dahan']); out.push([addDays(day, 1), 'Holi']); }
+            else out.push([day, name]);
+        });
+        hinduCache.set(y, out);
+        return out;
+    }
+
+    // the day (in a time zone, as an offset in minutes) on which the Sun reaches a longitude
+    // (tropical, or sidereal for Indian sankrantis), searching day `from` (y, m, d) for `days` days
+    function solarTermDay(y, m, d, days, targetLon, tzMin, sidereal) {
+        const lonAt = (t) => norm360(sunLongitude(t) - (sidereal ? ayanamsa(t) : 0));
+        for (let i = 0; i < days; i++) {
+            const start = new Date(Date.UTC(y, m - 1, d + i) - tzMin * 60000);
+            const end = new Date(start.getTime() + 86400000);
+            const a = norm360(lonAt(start) - targetLon), b = norm360(lonAt(end) - targetLon);
+            if (a > 300 && b < 60) { const g = new Date(Date.UTC(y, m - 1, d + i)); return D(g.getUTCFullYear(), g.getUTCMonth() + 1, g.getUTCDate()); }
+        }
+        return null;
+    }
+
+    // Chinese lunar dates (the browser knows the Chinese calendar): every day of year y with its lunar month/day
+    const chineseCache = new Map();
+    function chineseLunarDays(y) {
+        if (chineseCache.has(y)) return chineseCache.get(y);
+        const out = [];
+        let fmt = null;
+        try { fmt = new Intl.DateTimeFormat('en-u-ca-chinese', { month: 'numeric', day: 'numeric', timeZone: 'Asia/Shanghai' }); } catch (err) { /* old browser */ }
+        if (fmt) {
+            for (let dt = D(y, 1, 1); dt.getFullYear() === y; dt = addDays(dt, 1)) {
+                const parts = {};
+                fmt.formatToParts(new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate(), 4))).forEach((p) => { parts[p.type] = p.value; });
+                const leap = /bis/.test(parts.month);
+                out.push({ date: dt, month: parseInt(parts.month, 10), day: parseInt(parts.day, 10), leap });
+            }
+        }
+        chineseCache.set(y, out);
+        return out;
+    }
+    const lunarDates = (y, month, day) => chineseLunarDays(y).filter((x) => !x.leap && x.month === month && x.day === day).map((x) => x.date);
+
+    // Islamic dates (Umm al-Qura calendar); in India the day can be one later (moon sighting)
+    function islamicDates(y, month, day) {
+        let fmt = null;
+        try { fmt = new Intl.DateTimeFormat('en-u-ca-islamic-umalqura', { month: 'numeric', day: 'numeric', timeZone: 'UTC' }); } catch (err) { return []; }
+        const out = [];
+        for (let dt = D(y, 1, 1); dt.getFullYear() === y; dt = addDays(dt, 1)) {
+            const parts = {};
+            fmt.formatToParts(new Date(Date.UTC(dt.getFullYear(), dt.getMonth(), dt.getDate(), 12))).forEach((p) => { parts[p.type] = p.value; });
+            if (parseInt(parts.month, 10) === month && parseInt(parts.day, 10) === day) out.push(dt);
+        }
+        return out;
+    }
+
+    // US federal holidays on a weekend are observed on the Friday before / Monday after
+    function usObserved(date) {
+        const wd = date.getDay();
+        return wd === 6 ? addDays(date, -1) : wd === 0 ? addDays(date, 1) : null;
+    }
+
     function holidayList(code, y) {
         const E = easterSunday(y);
         const H = (date, name, local) => ({ date, name, local: local || '', obs: false });
@@ -3334,6 +3533,70 @@
                 O(D(y, 12, 6), "St Nicholas' Day", 'Nikolaustag'), O(D(y, 12, 24), 'Christmas Eve', 'Heiligabend'),
                 O(D(y, 12, 31), "New Year's Eve", 'Silvester')
             ];
+            case 'US': {
+                const list = [
+                    H(D(y, 1, 1), "New Year's Day"), H(nthWeekday(y, 1, 1, 3), 'Martin Luther King Jr. Day'),
+                    H(nthWeekday(y, 2, 1, 3), "Washington's Birthday (Presidents' Day)"), H(lastWeekday(y, 5, 1), 'Memorial Day'),
+                    H(D(y, 6, 19), 'Juneteenth'), H(D(y, 7, 4), 'Independence Day'),
+                    H(nthWeekday(y, 9, 1, 1), 'Labor Day'), H(nthWeekday(y, 10, 1, 2), "Columbus Day / Indigenous Peoples' Day"),
+                    H(D(y, 11, 11), 'Veterans Day'), H(nthWeekday(y, 11, 4, 4), 'Thanksgiving Day'),
+                    H(D(y, 12, 25), 'Christmas Day'),
+                    O(D(y, 2, 2), 'Groundhog Day'), O(D(y, 2, 14), "Valentine's Day"), O(D(y, 3, 17), "St. Patrick's Day"),
+                    O(E, 'Easter Sunday'), O(nthWeekday(y, 5, 0, 2), "Mother's Day"), O(nthWeekday(y, 6, 0, 3), "Father's Day"),
+                    O(D(y, 10, 31), 'Halloween'), O(addDays(nthWeekday(y, 11, 4, 4), 1), 'Black Friday'),
+                    O(D(y, 12, 24), 'Christmas Eve'), O(D(y, 12, 31), "New Year's Eve")
+                ];
+                // weekend federal holidays: the day off moves to Friday / Monday
+                [[D(y, 1, 1), "New Year's Day"], [D(y, 6, 19), 'Juneteenth'], [D(y, 7, 4), 'Independence Day'],
+                    [D(y, 11, 11), 'Veterans Day'], [D(y, 12, 25), 'Christmas Day'], [D(y + 1, 1, 1), "New Year's Day"]].forEach(([d, n]) => {
+                    const obs = usObserved(d);
+                    if (obs && obs.getFullYear() === y) list.push(H(obs, `${n} (observed)`, 'day off'));
+                });
+                // Election Day: the Tuesday after the first Monday of November, in even years
+                if (y % 2 === 0) list.push(O(addDays(nthWeekday(y, 11, 1, 1), 1), 'Election Day'));
+                return list;
+            }
+            case 'CN': {
+                const list = [
+                    H(D(y, 1, 1), "New Year's Day", '元旦'), H(D(y, 5, 1), 'Labour Day', '劳动节'),
+                    H(D(y, 10, 1), 'National Day', '国庆节')
+                ];
+                const add = (fn, dates, name, local) => dates.forEach((d) => list.push(fn(d, name, local)));
+                const newYear = lunarDates(y, 1, 1);
+                add(H, newYear, 'Chinese New Year (Spring Festival)', '春节');
+                add(O, newYear.map((d) => addDays(d, -1)), "Chinese New Year's Eve", '除夕');
+                add(O, lunarDates(y, 1, 15), 'Lantern Festival', '元宵节');
+                const qingming = solarTermDay(y, 4, 3, 4, 15, 480);
+                if (qingming) list.push(H(qingming, 'Qingming Festival (Tomb-Sweeping Day)', '清明节'));
+                add(H, lunarDates(y, 5, 5), 'Dragon Boat Festival', '端午节');
+                add(O, lunarDates(y, 7, 7), 'Qixi Festival', '七夕');
+                add(O, lunarDates(y, 7, 15), 'Ghost Festival', '中元节');
+                add(H, lunarDates(y, 8, 15), 'Mid-Autumn Festival', '中秋节');
+                add(O, lunarDates(y, 9, 9), 'Double Ninth Festival', '重阳节');
+                const dongzhi = solarTermDay(y, 12, 20, 4, 270, 480);
+                if (dongzhi) list.push(O(dongzhi, 'Winter Solstice Festival', '冬至'));
+                add(O, lunarDates(y, 12, 8), 'Laba Festival', '腊八节');
+                return list;
+            }
+            case 'IN': {
+                const hi = { 'Maha Shivaratri': 'महाशिवरात्रि', 'Holika Dahan': 'होलिका दहन', Holi: 'होली', 'Ram Navami': 'राम नवमी',
+                    'Raksha Bandhan': 'रक्षा बन्धन', 'Krishna Janmashtami': 'जन्माष्टमी', 'Ganesh Chaturthi': 'गणेश चतुर्थी',
+                    'Navratri begins': 'नवरात्रि', Dussehra: 'दशहरा', Diwali: 'दीपावली' };
+                const days_off = new Set(['Holi', 'Dussehra', 'Diwali']);
+                const list = [
+                    H(D(y, 1, 26), 'Republic Day', 'गणतंत्र दिवस'), H(D(y, 8, 15), 'Independence Day', 'स्वतंत्रता दिवस'),
+                    H(D(y, 10, 2), 'Gandhi Jayanti', 'गांधी जयंती'), H(addDays(E, -2), 'Good Friday'),
+                    H(D(y, 12, 25), 'Christmas Day'), O(D(y, 4, 14), 'Ambedkar Jayanti', 'आंबेडकर जयंती')
+                ];
+                const makar = solarTermDay(y, 1, 12, 5, 270, IST, true);
+                if (makar) list.push(O(makar, 'Makar Sankranti / Pongal', 'मकर संक्रान्ति'));
+                const mesha = solarTermDay(y, 4, 12, 4, 0, IST, true);
+                if (mesha) list.push(O(mesha, 'Vaisakhi (Baisakhi)', 'वैसाखी'));
+                hinduFestivals(y).forEach(([d, name]) => list.push((days_off.has(name) ? H : O)(d, name, hi[name] || '')));
+                islamicDates(y, 10, 1).forEach((d) => list.push(H(d, 'Eid al-Fitr', 'ईद उल-फ़ित्र · may be a day later in India')));
+                islamicDates(y, 12, 10).forEach((d) => list.push(H(d, 'Eid al-Adha (Bakrid)', 'बकरीद · may be a day later in India')));
+                return list;
+            }
             case 'JP': {
                 const t = y - 1980, leap = Math.floor(t / 4);
                 const vernal = Math.floor(20.8431 + 0.242194 * t - leap);
