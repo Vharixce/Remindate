@@ -74,7 +74,7 @@
             current: null
         }
     };
-//test
+//test2
     const $ = (id) => document.getElementById(id);
     const isMobile = () => window.matchMedia('(max-width: 760px)').matches;
 
@@ -202,6 +202,13 @@
         note.scheduledAt = note.scheduledAt || null;
         note.folderId = note.folderId || null;
         if (note.color === OLD_BRIGHT_RED) note.color = NEW_BRIGHT_RED;
+        if (typeof note.html === 'string' && /<img[^>]*width:\s*(?:12\.5|25|50)%/i.test(note.html)) {
+            note.html = note.html.replace(/(<img[^>]*width:\s*)(12\.5|25|50)%/gi, (m, a, v) => `${a}${{ '12.5': 12, 25: 24, 50: 48 }[v]}%`);
+        }
+        // no spaces between pictures that stand next to each other
+        if (typeof note.html === 'string' && /(<img[^>]*>)(?:\s|&nbsp;)+(?=<img)/i.test(note.html)) {
+            note.html = note.html.replace(/(<img[^>]*>)(?:\s|&nbsp;)+(?=<img)/gi, '$1');
+        }
         if (note.bgColor && OLD_BG_COLORS[note.bgColor]) note.bgColor = OLD_BG_COLORS[note.bgColor];
         if (typeof note.html === 'string' && /#(ffadad|ffd6a5|fdffb6|caffbf|a0c4ff|d4b5ff)|rgb\(\s*(255,\s*173|255,\s*214|253,\s*255|202,\s*255|160,\s*196|212,\s*181)/i.test(note.html)) {
             OLD_PASTELS.forEach(([re, color]) => { note.html = note.html.replace(re, color); });
@@ -1917,7 +1924,7 @@
             const last = rects[rects.length - 1];
             return {
                 inline: true, line, beforeImg: i < 0 ? null : imgs[i],
-                x: i < 0 ? last.right + 6 : rects[i].left - 6, y: i < 0 ? last.top : rects[i].top,
+                x: i < 0 ? last.right : rects[i].left - 4, y: i < 0 ? last.top : rects[i].top,
                 h: i < 0 ? last.height : rects[i].height, end: i < 0
             };
         }
@@ -1950,7 +1957,7 @@
         const img = document.createElement('img');
         img.src = src;
         img.alt = '';
-        img.style.width = '25%'; // new pictures start at size M
+        img.style.width = '24%'; // new pictures start at size M
         line.appendChild(img);
         return line;
     }
@@ -1969,6 +1976,8 @@
     function placeInline(img, point) {
         const old = img.parentNode;
         point.line.insertBefore(img, point.beforeImg && point.beforeImg.parentNode === point.line ? point.beforeImg : null);
+        // no spaces between pictures, so 4 × M fit exactly on one line
+        [...point.line.childNodes].forEach((n) => { if (n.nodeType === 3 && !n.textContent.trim()) n.remove(); });
         // the line it came from is now empty: remove it
         if (old && old !== point.line && old.parentNode === editorEl && !old.querySelector('img') && !old.textContent.trim()) old.remove();
     }
@@ -2028,7 +2037,7 @@
         const er = editorEl.getBoundingClientRect();
         const cs = getComputedStyle(editorEl);
         const left = er.left + parseFloat(cs.paddingLeft || 0);
-        const width = (er.width - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0)) * (widthPct || 25) / 100;
+        const width = (er.width - parseFloat(cs.paddingLeft || 0) - parseFloat(cs.paddingRight || 0)) * (widthPct || 24) / 100;
         const height = Math.max(24, width * (aspect || 0.66));
         dropOutline.classList.toggle('inline', !!point.inline);
         if (point.inline && point.end) {
@@ -2100,7 +2109,7 @@
         if (!movingNoteImg && !Array.from(e.dataTransfer.types || []).includes('Files')) return;
         e.preventDefault();
         const aspect = movingNoteImg && movingNoteImg.naturalWidth ? movingNoteImg.naturalHeight / movingNoteImg.naturalWidth : 0.66;
-        const pct = movingNoteImg ? parseFloat(movingNoteImg.style.width) || 25 : 25;
+        const pct = movingNoteImg ? parseFloat(movingNoteImg.style.width) || 24 : 24;
         showDropOutline(dropTarget(e.clientX, e.clientY), aspect, pct);
     });
     editorEl.addEventListener('dragleave', (e) => {

@@ -1926,6 +1926,6 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 #textUndo:disabled, #textRedo:disabled { opacity: .35; cursor: default; }
 
 /* pictures side by side on one line */
-.rich-editor div > img + img { margin-left: 6px; }
+.rich-editor div > img + img { margin-left: 0; }
 .drop-outline.inline { box-shadow: none; background: rgba(124,111,240,.25); }
 .image-tools { flex-wrap: wrap; }
