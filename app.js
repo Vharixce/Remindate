@@ -191,7 +191,7 @@
 
     // the pastel colours became 10% less white: update text that used the old ones
     const OLD_BG_COLORS = { '#ff9494': '#372020', '#ffca8c': '#372b20', '#fcff9c': '#373420', '#b5ffa6': '#203722',
-        '#86b4ff': '#202937', '#c59cff': '#2b2037', '#000000': '#2b2b2b' };
+        '#86b4ff': '#202937', '#c59cff': '#2b2037', '#2b2b2b': '#000000' };
     const OLD_PASTELS = [[/#ffadad|rgb\(255,\s*173,\s*173\)/gi, '#ff9494'], [/#ffd6a5|rgb\(255,\s*214,\s*165\)/gi, '#ffca8c'], [/#fdffb6|rgb\(253,\s*255,\s*182\)/gi, '#fcff9c'], [/#caffbf|rgb\(202,\s*255,\s*191\)/gi, '#b5ffa6'], [/#a0c4ff|rgb\(160,\s*196,\s*255\)/gi, '#86b4ff'], [/#d4b5ff|rgb\(212,\s*181,\s*255\)/gi, '#c59cff']];
     function migrateNote(note) {
         note.id = note.id || uid();
@@ -600,14 +600,14 @@
         ['', 'No colour'],
         ['#372020', 'Red'], ['#372b20', 'Orange'], ['#373420', 'Yellow'],
         ['#203722', 'Green'], ['#202937', 'Blue'], ['#2b2037', 'Purple'],
-        ['#2b2b2b', 'Grey']
+        ['#000000', 'Black'], ['#c9c9ce', 'Light grey']
     ];
 
     // background colour of a tree item; dark text on light colours, light text on dark ones
     function bgStyle(color) {
         const r = parseInt(color.slice(1, 3), 16), g = parseInt(color.slice(3, 5), 16), b = parseInt(color.slice(5, 7), 16);
         const light = (0.299 * r + 0.587 * g + 0.114 * b) > 140;
-        return `--item-bg:${color};--item-fg:${light ? '#14141c' : '#f5f5ff'};--item-dim:${light ? 'rgba(20,20,28,.65)' : 'rgba(245,245,255,.7)'}`;
+        return `--item-bg:${color};--item-fg:${light ? '#14141c' : '#f5f5ff'};--item-dim:${light ? 'rgba(20,20,28,.65)' : 'rgba(245,245,255,.7)'};--item-hover:${light ? 'rgba(0,0,0,.07)' : 'rgba(255,255,255,.07)'}`;
     }
     function setItemBg(item, color, isFolder) {
         if ((item.bgColor || '') === (color || '')) return;
@@ -3455,6 +3455,7 @@
             <line x1="50" y1="55" x2="50" y2="27" class="hand hour"/>
             <line x1="50" y1="57" x2="50" y2="15" class="hand minute"/>
             <line x1="50" y1="60" x2="50" y2="11" class="hand second"/>
+            <g class="mark-hand" visibility="hidden"><line x1="50" y1="50" x2="50" y2="9"/><circle cx="50" cy="9" r="2.2"/></g>
             <circle cx="50" cy="50" r="2.4" class="pin"/>
         </svg>`;
     }
@@ -3477,10 +3478,84 @@
                 <div class="clock-date"></div>
                 <div class="clock-diff"></div>
                 <div class="clock-sun"></div>
+                <div class="clock-mark" hidden></div>
             </div>`;
         }).join('') + `<button class="clock-card clock-add" id="clockAdd" type="button"><span class="clock-add-plus">+</span><span>Add clock</span></button>`;
         updateClocks(now, true);
+        updateClockMarks();
     }
+
+    /* Red marker: click (or drag) on a clock to mark a moment; every clock shows that same
+     * moment in its own time. Dark red = night there, light red = day there. */
+    let clockMark = null; // the marked moment (a Date), or null
+
+    function isNightAt(c, when) {
+        const p = zoneParts(c.tz, when);
+        if (c.lat === null || c.lat === undefined) return p.h < 7 || p.h >= 19;
+        const sun = sunTimes(c.lat, c.lon, p.y, p.m, p.d);
+        if (sun.polar) return sun.polar === 'night';
+        return when < sun.rise || when >= sun.set;
+    }
+
+    function updateClockMarks() {
+        document.querySelectorAll('#clockGrid .clock-card[data-clock-id]').forEach((card) => {
+            const c = clockInfo(card.dataset.clockId);
+            const hand = card.querySelector('.mark-hand');
+            const label = card.querySelector('.clock-mark');
+            if (!c || !hand) return;
+            if (!clockMark) {
+                hand.setAttribute('visibility', 'hidden');
+                label.hidden = true;
+                return;
+            }
+            const p = zoneParts(c.tz, clockMark);
+            const night = isNightAt(c, clockMark);
+            hand.setAttribute('visibility', 'visible');
+            hand.setAttribute('transform', `rotate(${((p.h % 12) * 30 + p.min * 0.5).toFixed(2)} 50 50)`);
+            hand.classList.toggle('night', night);
+            const today = zoneParts(c.tz, new Date());
+            const sameDay = today.y === p.y && today.m === p.m && today.d === p.d;
+            label.hidden = false;
+            label.classList.toggle('night', night);
+            label.innerHTML = `<span class="clock-mark-dot"></span>${pad2(p.h)}:${pad2(p.min)}${sameDay ? '' : ` ${p.wd}`} · ${night ? 'night' : 'day'}`
+                + '<button type="button" class="clock-mark-clear" title="Remove the red marker" aria-label="Remove the red marker">&times;</button>';
+        });
+    }
+
+    // Where on the clock face was clicked → the nearest moment (± 6 h from now) that this clock shows there
+    function markFromPointer(card, e) {
+        const face = card.querySelector('.clock-face');
+        const r = face.getBoundingClientRect();
+        const dx = e.clientX - (r.left + r.width / 2), dy = e.clientY - (r.top + r.height / 2);
+        let deg = Math.atan2(dx, -dy) * 180 / Math.PI;
+        if (deg < 0) deg += 360;
+        const dialMin = (Math.round(deg * 2 / 5) * 5) % 720; // 12 hours = 720 minutes, snap to 5 min
+        const c = clockInfo(card.dataset.clockId);
+        const now = new Date();
+        const p = zoneParts(c.tz, now);
+        let delta = dialMin - ((p.h % 12) * 60 + p.min);
+        if (delta > 360) delta -= 720;
+        if (delta <= -360) delta += 720;
+        clockMark = new Date(now.getTime() - p.s * 1000 - now.getMilliseconds() + delta * 60000);
+        updateClockMarks();
+    }
+
+    let markDrag = null;
+    $('clockGrid').addEventListener('pointerdown', (e) => {
+        const face = e.target.closest('.clock-face');
+        if (!face || e.button > 0) return;
+        const card = face.closest('.clock-card');
+        e.preventDefault();
+        markDrag = { card, id: e.pointerId };
+        try { face.setPointerCapture(e.pointerId); } catch (err) { /* ignore */ }
+        markFromPointer(card, e);
+    });
+    $('clockGrid').addEventListener('pointermove', (e) => {
+        if (markDrag && e.pointerId === markDrag.id) markFromPointer(markDrag.card, e);
+    });
+    const endMarkDrag = (e) => { if (markDrag && e.pointerId === markDrag.id) markDrag = null; };
+    $('clockGrid').addEventListener('pointerup', endMarkDrag);
+    $('clockGrid').addEventListener('pointercancel', endMarkDrag);
 
     let lastSunDay = '';
     function updateClocks(now = new Date(), force = false) {
@@ -3554,6 +3629,7 @@
 
     $('clockGrid').addEventListener('click', (e) => {
         if (e.target.closest('#clockAdd')) { openClockPicker(); return; }
+        if (e.target.closest('.clock-mark-clear')) { clockMark = null; updateClockMarks(); return; }
         const remove = e.target.closest('.clock-remove');
         if (remove) {
             const id = remove.closest('.clock-card').dataset.clockId;
