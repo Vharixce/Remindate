@@ -1929,3 +1929,15 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .rich-editor div > img + img { margin-left: 0; }
 .drop-outline.inline { box-shadow: none; background: rgba(124,111,240,.25); }
 .image-tools { flex-wrap: wrap; }
+
+/* download the text (PDF / Word) */
+.text-toolbar .tool-btn.text-download { margin-left: auto; width: auto; padding: 0 10px; white-space: nowrap; align-self: stretch; min-height: 32px; flex-shrink: 0; }
+/* folder choice sits with the title (it does not stick to the top) */
+.editor-actions { align-items: center; flex-wrap: wrap; }
+.editor-actions .folder-select { max-width: 180px; }
+@media (max-width: 760px) {
+    .editor-header { flex-wrap: wrap; }
+    .editor-actions { width: 100%; }
+    .editor-actions .folder-select { flex: 1 1 100%; max-width: none; min-width: 0; }
+    .editor-actions .btn { flex: 1 1 auto; }
+}

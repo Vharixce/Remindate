@@ -2077,6 +2077,8 @@
     editorEl.addEventListener('paste', (e) => {
         const dt = e.clipboardData;
         if (!dt) return;
+        // in Draw / Grid the text is hidden (but may still have the focus): leave the paste to them
+        if (state.prefs.mode !== 'text') return;
         const files = [...dt.files].filter((f) => f.type.startsWith('image/'));
         const audio = [...dt.files].filter((f) => f.type.startsWith('audio/'));
         if (files.length || audio.length) {
@@ -2232,6 +2234,239 @@
             markTextChanged();
         }
     });
+
+    /* ---------------- download the text as PDF or Word ---------------- */
+    // the text part, cleaned up for exporting (voice notes become a short line)
+    function exportContent() {
+        flushEditor();
+        const box = document.createElement('div');
+        box.innerHTML = editorEl.innerHTML;
+        box.querySelectorAll('[data-voice]').forEach((v) => { v.replaceWith(document.createTextNode('🎤 [voice note]')); });
+        box.querySelectorAll('.img-selected, .selected').forEach((n) => n.classList.remove('img-selected', 'selected'));
+        return box;
+    }
+    const exportName = () => {
+        const note = noteById(state.currentNoteId);
+        return ((note && note.title.trim()) || 'Note').replace(/[\\/:*?"<>|]+/g, '').slice(0, 80) || 'Note';
+    };
+
+    // PDF: a clean page in the print window → "Save as PDF"
+    function downloadPdf() {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        const body = exportContent();
+        const frame = document.createElement('iframe');
+        frame.style.cssText = 'position:fixed;right:0;bottom:0;width:0;height:0;border:0;';
+        document.body.appendChild(frame);
+        const doc = frame.contentDocument;
+        doc.open();
+        doc.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${escapeHtml(exportName())}</title><style>
+            @page { margin: 18mm; }
+            body { font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif; font-size: 11pt; line-height: 1.5; color: #111; }
+            h1.note-title { font-size: 20pt; margin: 0 0 12pt; }
+            h1, h2, h3 { line-height: 1.25; } h2 { font-size: 1.8em; margin: .4em 0; }
+            img { max-width: 100%; vertical-align: bottom; border-radius: 4px; }
+            div > img + img { margin-left: 0; }
+            a { color: #2563eb; }
+            ul, ol { padding-left: 1.4em; }
+            blockquote { border-left: 3px solid #ccc; margin: 0; padding-left: 10px; color: #444; }
+            img, div:has(> img) { break-inside: avoid; }
+        </style></head><body><h1 class="note-title">${escapeHtml(note.title.trim() || 'Untitled')}</h1>${body.innerHTML}</body></html>`);
+        doc.close();
+        const go = () => {
+            try { frame.contentWindow.focus(); frame.contentWindow.print(); } catch (err) { toast('Could not open the print window'); }
+            setTimeout(() => frame.remove(), 60000);
+        };
+        // wait for the pictures before printing
+        const imgs = [...doc.images].filter((i) => !i.complete);
+        if (!imgs.length) setTimeout(go, 50);
+        else Promise.all(imgs.map((i) => new Promise((r) => { i.onload = i.onerror = r; }))).then(go);
+        toast('Choose "Save as PDF" in the print window');
+    }
+
+    // ----- Word (.docx), built right here: text, formatting, headings, lists, pictures -----
+    const xmlEsc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const CRC_TABLE = (() => {
+        const t = new Uint32Array(256);
+        for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+        return t;
+    })();
+    function crc32(bytes) {
+        let c = 0xFFFFFFFF;
+        for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 255] ^ (c >>> 8);
+        return (c ^ 0xFFFFFFFF) >>> 0;
+    }
+    // a simple zip file (stored, not compressed) — a .docx is a zip with XML files in it
+    function makeZip(files) {
+        const enc = new TextEncoder();
+        const parts = [], central = [];
+        let offset = 0;
+        files.forEach(({ name, data }) => {
+            const bytes = typeof data === 'string' ? enc.encode(data) : data;
+            const nameBytes = enc.encode(name);
+            const crc = crc32(bytes);
+            const local = new DataView(new ArrayBuffer(30));
+            local.setUint32(0, 0x04034b50, true); local.setUint16(4, 20, true); local.setUint16(6, 0x0800, true);
+            local.setUint16(8, 0, true); local.setUint32(14, crc, true);
+            local.setUint32(18, bytes.length, true); local.setUint32(22, bytes.length, true);
+            local.setUint16(26, nameBytes.length, true);
+            parts.push(new Uint8Array(local.buffer), nameBytes, bytes);
+            const cen = new DataView(new ArrayBuffer(46));
+            cen.setUint32(0, 0x02014b50, true); cen.setUint16(4, 20, true); cen.setUint16(6, 20, true); cen.setUint16(8, 0x0800, true);
+            cen.setUint32(16, crc, true); cen.setUint32(20, bytes.length, true); cen.setUint32(24, bytes.length, true);
+            cen.setUint16(28, nameBytes.length, true); cen.setUint32(42, offset, true);
+            central.push(new Uint8Array(cen.buffer), nameBytes);
+            offset += 30 + nameBytes.length + bytes.length;
+        });
+        const cenSize = central.reduce((a, p) => a + p.length, 0);
+        const end = new DataView(new ArrayBuffer(22));
+        end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+        end.setUint32(12, cenSize, true); end.setUint32(16, offset, true);
+        return new Blob([...parts, ...central, new Uint8Array(end.buffer)], { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+    }
+    function cssColorHex(c) {
+        if (!c) return null;
+        const m = /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/i.exec(c);
+        if (m) return [m[1], m[2], m[3]].map((v) => (+v).toString(16).padStart(2, '0')).join('').toUpperCase();
+        const h = /^#([0-9a-f]{6})$/i.exec(c.trim());
+        return h ? h[1].toUpperCase() : null;
+    }
+    // a picture as PNG bytes (Word can't show every web format)
+    async function imagePng(img) {
+        const el = new Image();
+        el.src = img.getAttribute('src');
+        await (el.decode ? el.decode().catch(() => {}) : new Promise((r) => { el.onload = el.onerror = r; }));
+        if (!el.naturalWidth) return null;
+        const c = document.createElement('canvas');
+        c.width = el.naturalWidth; c.height = el.naturalHeight;
+        c.getContext('2d').drawImage(el, 0, 0);
+        const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
+        return blob ? { bytes: new Uint8Array(await blob.arrayBuffer()), w: el.naturalWidth, h: el.naturalHeight } : null;
+    }
+
+    async function downloadWord() {
+        const note = noteById(state.currentNoteId);
+        if (!note) return;
+        toast('Making the Word file…');
+        const root = exportContent();
+        const media = [];   // { name, bytes }
+        const paras = [];   // finished <w:p> elements
+        const PAGE_EMU = 5731510; // text width of an A4 page with 2.54 cm margins
+        let pending = [];   // runs of the paragraph being built
+        let listInfo = null;
+
+        const runXml = (text, f) => {
+            const rp = [f.b && '<w:b/>', f.i && '<w:i/>', f.u && '<w:u w:val="single"/>', f.s && '<w:strike/>',
+                f.color && `<w:color w:val="${f.color}"/>`, f.size && `<w:sz w:val="${f.size}"/><w:szCs w:val="${f.size}"/>`].filter(Boolean).join('');
+            return `<w:r>${rp ? `<w:rPr>${rp}</w:rPr>` : ''}<w:t xml:space="preserve">${xmlEsc(text)}</w:t></w:r>`;
+        };
+        const flushPara = (pPr = '') => {
+            if (!pending.length && !pPr) { paras.push('<w:p/>'); return; }
+            let prefix = '';
+            if (listInfo) {
+                prefix = runXml(listInfo.ordered ? `${listInfo.n}.\t` : '•\t', {});
+                pPr += '<w:ind w:left="720" w:hanging="360"/>';
+            }
+            paras.push(`<w:p>${pPr ? `<w:pPr>${pPr}</w:pPr>` : ''}${prefix}${pending.join('')}</w:p>`);
+            pending = [];
+        };
+
+        async function walk(node, f) {
+            if (node.nodeType === 3) {
+                const t = node.textContent.replace(/\s+/g, ' ');
+                if (t) pending.push(runXml(t, f));
+                return;
+            }
+            if (node.nodeType !== 1) return;
+            const tag = node.tagName;
+            const style = node.getAttribute('style') || '';
+            const nf = { ...f };
+            if (tag === 'B' || tag === 'STRONG' || /font-weight:\s*(bold|[6-9]00)/i.test(style)) nf.b = true;
+            if (tag === 'I' || tag === 'EM' || /font-style:\s*italic/i.test(style)) nf.i = true;
+            if (tag === 'U' || /text-decoration[^;]*underline/i.test(style)) nf.u = true;
+            if (tag === 'S' || tag === 'STRIKE' || tag === 'DEL' || /line-through/i.test(style)) nf.s = true;
+            if (tag === 'A') { nf.u = true; nf.color = '2563EB'; }
+            const col = cssColorHex(node.style && node.style.color) || (tag === 'FONT' && cssColorHex(node.getAttribute('color')));
+            if (col) nf.color = col;
+            if (tag === 'BR') { pending.push('<w:r><w:br/></w:r>'); return; }
+            if (tag === 'IMG') {
+                const png = await imagePng(node);
+                if (!png) return;
+                const id = media.length + 1;
+                media.push({ name: `image${id}.png`, bytes: png.bytes });
+                const pct = parseFloat(node.style.width) || 100;
+                const cx = Math.round(PAGE_EMU * Math.min(100, pct) / 100);
+                const cy = Math.round(cx * png.h / png.w);
+                pending.push(`<w:r><w:drawing><wp:inline distT="0" distB="0" distL="0" distR="0"><wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${id}" name="Picture ${id}"/><wp:cNvGraphicFramePr><a:graphicFrameLocks xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" noChangeAspect="1"/></wp:cNvGraphicFramePr><a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="${id}" name="image${id}.png"/><pic:cNvPicPr/></pic:nvPicPr><pic:blipFill><a:blip r:embed="rIdImg${id}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill><pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`);
+                return;
+            }
+            if (tag === 'UL' || tag === 'OL') {
+                if (pending.length) flushPara();
+                const prev = listInfo;
+                let n = 0;
+                for (const li of node.children) {
+                    if (li.tagName !== 'LI') continue;
+                    listInfo = { ordered: tag === 'OL', n: ++n };
+                    for (const c of li.childNodes) await walk(c, nf);
+                    flushPara();
+                }
+                listInfo = prev;
+                return;
+            }
+            const block = ['DIV', 'P', 'H1', 'H2', 'H3', 'BLOCKQUOTE', 'LI'].includes(tag);
+            if (block && pending.length) flushPara();
+            if (/^H[1-3]$/.test(tag)) { nf.b = true; nf.size = { H1: 44, H2: 36, H3: 28 }[tag]; }
+            for (const c of node.childNodes) await walk(c, nf);
+            if (block) {
+                const empty = !pending.length;
+                if (tag === 'BLOCKQUOTE') flushPara('<w:ind w:left="567"/>');
+                else if (!empty || !node.querySelector('img, ul, ol, div, p, h1, h2, h3')) flushPara();
+            }
+        }
+
+        try {
+            for (const c of root.childNodes) await walk(c, {});
+            if (pending.length) flushPara();
+        } catch (err) {
+            console.error(err);
+            toast('Could not make the Word file');
+            return;
+        }
+        const title = runXml(note.title.trim() || 'Untitled', { b: true, size: 40 });
+        const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+        const docXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="${W}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"><w:body><w:p><w:pPr><w:spacing w:after="240"/></w:pPr>${title}</w:p>${paras.join('')}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="708" w:footer="708" w:gutter="0"/></w:sectPr></w:body></w:document>`;
+        const rels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${media.map((m, i) => `<Relationship Id="rIdImg${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/${m.name}"/>`).join('')}<Relationship Id="rIdStyles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+        const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="${W}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:eastAsia="Calibri" w:cs="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault><w:pPrDefault><w:pPr><w:spacing w:after="80" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults></w:styles>`;
+        const blob = makeZip([
+            { name: '[Content_Types].xml', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>` },
+            { name: '_rels/.rels', data: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>` },
+            { name: 'word/document.xml', data: docXml },
+            { name: 'word/styles.xml', data: styles },
+            { name: 'word/_rels/document.xml.rels', data: rels },
+            ...media.map((m) => ({ name: `word/media/${m.name}`, data: m.bytes }))
+        ]);
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `${exportName()}.docx`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
+
+    $('textDownload').addEventListener('click', (e) => {
+        if (!noteById(state.currentNoteId)) return;
+        showMenu(e.currentTarget, 'Download this note', [
+            { label: 'PDF', icon: '📄', run: downloadPdf },
+            { label: 'Word (.docx)', icon: '📝', run: downloadWord }
+        ]);
+    });
+
     // Download the selected picture (also possible with right-click → Save image as)
     $('imageDownload').addEventListener('click', () => {
         if (!selectedImg) return;

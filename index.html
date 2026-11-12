@@ -88,6 +88,7 @@
                     <div class="editor-header">
                         <input type="text" id="noteTitle" class="title-input" placeholder="Title" autocomplete="off">
                         <div class="editor-actions">
+                            <select id="noteFolder" class="folder-select" title="Folder for this note"></select>
                             <button class="btn private-btn" id="privateBtn" type="button" aria-pressed="false">🔓 Make Private</button>
                             <button class="btn" id="saveNoteBtn">Save</button>
                             <button class="btn btn-danger" id="deleteNoteBtn">Delete</button>
@@ -100,7 +101,6 @@
                             <button class="toggle-btn" id="modeDraw">Draw</button>
                             <button class="toggle-btn" id="modeGrid">Grid</button>
                         </div>
-                        <select id="noteFolder" class="folder-select" title="Folder for this note"></select>
                     </div>
 
                     <div class="card schedule-card">
@@ -206,6 +206,7 @@
                                 <button class="tool-btn" id="imageDownload" title="Download picture">⬇ Download</button>
                                 <button class="tool-btn" id="imageRemove" title="Remove image">Remove</button>
                             </span>
+                            <button class="tool-btn text-download" id="textDownload" type="button" title="Download this note as PDF or Word">⬇ Download</button>
                         </div>
                     </div>
 
