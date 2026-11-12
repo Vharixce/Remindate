@@ -4267,10 +4267,15 @@
                 updateRing(card, c, now);
                 dayChanged = true;
             }
-            // day or night there, checked every second: the face turns dark / light right at sunset / sunrise
-            const sun = card._sun;
-            const isDay = !sun ? p.h >= 7 && p.h < 19 : sun.polar ? sun.polar === 'day' : now >= sun.rise && now < sun.set;
-            if (card.classList.contains('night') === isDay) card.classList.toggle('night', !isDay);
+            // day or night there: checked once a minute (when the second hand passes 12),
+            // so the face turns dark / light within a minute of sunset / sunrise
+            const minuteKey = `${dayKey} ${p.h}:${p.min}`;
+            if (force || card._minuteKey !== minuteKey) {
+                card._minuteKey = minuteKey;
+                const sun = card._sun;
+                const isDay = !sun ? p.h >= 7 && p.h < 19 : sun.polar ? sun.polar === 'day' : now >= sun.rise && now < sun.set;
+                card.classList.toggle('night', !isDay);
+            }
         });
         // the red marker's labels say "today" or the weekday: refresh them on a new day
         if (dayChanged && !force && clockMark) updateClockMarks();
