@@ -250,6 +250,28 @@
         scheduleGithubSave();
     };
     const savePrefs = () => writeJSON(STORAGE.prefs, state.prefs);
+    // Holiday choices and world clocks also go into remindate.json (the newest change wins)
+    function settingsChanged() {
+        state.prefs.settingsAt = new Date().toISOString();
+        savePrefs();
+        markChanged();
+        scheduleGithubSave();
+    }
+    function syncedSettings() {
+        const p = state.prefs;
+        if (!Array.isArray(p.holidays) && !Array.isArray(p.clocks)) return null;
+        return {
+            holidays: Array.isArray(p.holidays) ? [...p.holidays] : null,
+            clocks: Array.isArray(p.clocks) ? [...p.clocks] : null,
+            at: p.settingsAt || null
+        };
+    }
+    function validSettings(v) {
+        if (!v || typeof v !== 'object') return null;
+        const list = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string').slice(0, 100) : null);
+        const out = { holidays: list(v.holidays), clocks: list(v.clocks), at: typeof v.at === 'string' ? v.at : null };
+        return out.holidays || out.clocks ? out : null;
+    }
     const saveAlarms = () => writeJSON(STORAGE.alarms, state.alarms);
 
     /* ---------------- hulpfuncties ---------------- */
@@ -1418,6 +1440,17 @@
     }
     const DROP_TAGS = new Set(['SCRIPT', 'STYLE', 'IFRAME', 'OBJECT', 'EMBED', 'TEMPLATE', 'META', 'LINK', 'TITLE', 'svg', 'SVG']);
 
+    // "Default colour": the normal (white) text colour of the notes
+    const COLOR_MARK = '#010203';
+    let plainTextHexCache = '';
+    function plainTextHex() {
+        if (!plainTextHexCache) {
+            const ed = document.getElementById('noteContent');
+            plainTextHexCache = ed ? cssColorToHex(getComputedStyle(ed).color) : '';
+        }
+        return plainTextHexCache;
+    }
+
     // Keep only safe, simple formatting + embedded (data:) images
     function sanitizeHtml(html) {
         const doc = new DOMParser().parseFromString(`<div>${html || ''}</div>`, 'text/html');
@@ -1444,7 +1477,8 @@
                 if (child.tagName === 'FONT' || child.tagName === 'SPAN') {
                     const styleColor = /(?:^|;)\s*color\s*:\s*([^;]+)/i.exec(child.getAttribute('style') || '');
                     const color = cssColorToHex(child.tagName === 'FONT' ? child.getAttribute('color') : (styleColor && styleColor[1]));
-                    if (!color) { child.replaceWith(...child.childNodes); return; }
+                    // the normal text colour (or the old "back to normal" marker) needs no colour tag
+                    if (!color || color === COLOR_MARK || color === plainTextHex()) { child.replaceWith(...child.childNodes); return; }
                     const span = doc.createElement('span');
                     span.setAttribute('style', `color:${color}`);
                     span.append(...child.childNodes);
@@ -1716,11 +1750,15 @@
         if (!noteById(state.currentNoteId)) return;
         editorEl.focus();
         try { document.execCommand('styleWithCSS', false, false); } catch (_) {}
+        const sel = window.getSelection();
         if (color) {
             document.execCommand('foreColor', false, color);
+        } else if (!sel.rangeCount || sel.isCollapsed) {
+            // nothing selected: type on in the normal (white) colour (the tag is removed when saving)
+            document.execCommand('foreColor', false, plainTextHex() || '#ffffff');
         } else {
             // back to the normal colour: colour with a marker, then remove those colour tags
-            const MARK = '#010203';
+            const MARK = COLOR_MARK;
             document.execCommand('foreColor', false, MARK);
             editorEl.querySelectorAll('font[color], span[style*="color"]').forEach((el) => {
                 const c = el.tagName === 'FONT' ? el.getAttribute('color') : cssColorToHex(el.style.color);
@@ -4570,7 +4608,7 @@
         if (remove) {
             const id = remove.closest('.clock-card').dataset.clockId;
             state.prefs.clocks = clockIds().filter((x) => x !== id);
-            savePrefs();
+            settingsChanged();
             renderClocks();
         }
     });
@@ -4602,7 +4640,7 @@
         const btn = e.target.closest('.clock-city');
         if (!btn || btn.disabled) return;
         state.prefs.clocks = clockIds().concat(btn.dataset.city);
-        savePrefs();
+        settingsChanged();
         closeModals();
         renderClocks();
     });
@@ -4621,7 +4659,7 @@
 
     $('holidayOptions').addEventListener('change', () => {
         state.prefs.holidays = [...$('holidayOptions').querySelectorAll('input:checked')].map((el) => el.value);
-        savePrefs();
+        settingsChanged();
         if (state.prefs.activeTab === 'calendar') renderCalendar();
     });
 
@@ -6317,6 +6355,7 @@
         el.classList.remove('cb-editing');
         if (it.type === 'frame') it.title = t.textContent.trim() || 'Frame';
         else {
+            cbStripPlainColor(t, el);
             it.html = sanitizeHtml(t.innerHTML);
             el._html = null;
             if (it.type === 'text' && !htmlToText(it.html).trim() && !/<img/i.test(it.html)) {
@@ -6369,6 +6408,7 @@
             sel.removeAllRanges();
             sel.addRange(r);
             fn(t);
+            cbStripPlainColor(t, el);
             const it = cbById(id);
             it.html = sanitizeHtml(t.innerHTML);
             el._html = null;
@@ -6378,10 +6418,24 @@
         cbRender();
         cbSave();
     }
+    // colour tags with the normal text colour of this sticky note are not needed
+    function cbStripPlainColor(t, el) {
+        const plain = cssColorToHex(getComputedStyle(el).color);
+        t.querySelectorAll('font[color], span[style*="color"]').forEach((c) => {
+            const v = cssColorToHex(c.tagName === 'FONT' ? c.getAttribute('color') : c.style.color);
+            if (v && (v === plain || v === COLOR_MARK)) c.replaceWith(...c.childNodes);
+        });
+    }
     function cbTextColor(t, color) {
         try { document.execCommand('styleWithCSS', false, false); } catch (_) {}
         if (color) { document.execCommand('foreColor', false, color); return; }
-        const MARK = '#010203';
+        const sel = window.getSelection();
+        if (!sel.rangeCount || sel.isCollapsed) {
+            // nothing selected: type on in the normal colour of this sticky note / text
+            document.execCommand('foreColor', false, cssColorToHex(getComputedStyle(t.parentElement).color) || '#ffffff');
+            return;
+        }
+        const MARK = COLOR_MARK;
         document.execCommand('foreColor', false, MARK);
         t.querySelectorAll('font[color], span[style*="color"]').forEach((el) => {
             const c = el.tagName === 'FONT' ? el.getAttribute('color') : cssColorToHex(el.style.color);
@@ -8065,7 +8119,7 @@
         return JSON.stringify(value === undefined ? null : value);
     }
 
-    const snapshotKey = (snap) => stableStringify({ notes: snap.notes, folders: snap.folders, deleted: snap.deleted, privatePass: snap.privatePass || null });
+    const snapshotKey = (snap) => stableStringify({ notes: snap.notes, folders: snap.folders, deleted: snap.deleted, privatePass: snap.privatePass || null, settings: snap.settings || null });
 
     function localSnapshot() {
         return JSON.parse(JSON.stringify({
@@ -8073,6 +8127,7 @@
             folders: state.folders,
             deleted: state.deleted,
             privatePass: privatePass || null,
+            settings: syncedSettings(),
             updatedAt: state.updatedAt
         }));
     }
@@ -8085,6 +8140,7 @@
             folders: (Array.isArray(data) ? [] : (data.folders || [])).map((f) => { migrateFolder(f); return f; }),
             deleted: normalizeDeleted(Array.isArray(data) ? null : data.deleted),
             privatePass: Array.isArray(data) ? null : validPass(data.privatePass),
+            settings: Array.isArray(data) ? null : validSettings(data.settings),
             updatedAt: Array.isArray(data) ? null : (data.updatedAt || null)
         };
         return snap;
@@ -8134,7 +8190,23 @@
         const lp = local.privatePass || null, rp = remote.privatePass || null;
         const pass = !lp ? rp : !rp ? lp : (timeOf(lp.setAt) > timeOf(rp.setAt) ? lp : rp);
 
-        return { notes, folders, deleted, privatePass: pass, updatedAt: laterIso(local.updatedAt, remote.updatedAt) };
+        // holiday choices + clocks: the newest change wins; with no dates, the ones in remindate.json
+        const ls = local.settings || null, rs = remote.settings || null;
+        const settings = !ls ? rs : !rs ? ls : (timeOf(ls.at) > timeOf(rs.at) ? ls : rs);
+
+        return { notes, folders, deleted, privatePass: pass, settings, updatedAt: laterIso(local.updatedAt, remote.updatedAt) };
+    }
+
+    // Holiday choices + clocks from remindate.json / a .json file
+    function applySettings(set) {
+        if (set.holidays) state.prefs.holidays = [...set.holidays];
+        if (set.clocks) state.prefs.clocks = [...set.clocks];
+        state.prefs.settingsAt = set.at || state.prefs.settingsAt || null;
+        savePrefs();
+        syncHolidayCheckboxes();
+        if (state.prefs.activeTab === 'calendar') {
+            if (state.prefs.calendarMode === 'clock') renderClocks(); else renderCalendar();
+        }
     }
 
     // Put a merged snapshot into the app without counting it as a new local change
@@ -8147,6 +8219,7 @@
         state.folders = snap.folders;
         state.deleted = snap.deleted;
         state.updatedAt = snap.updatedAt;
+        if (snap.settings && stableStringify(snap.settings) !== stableStringify(syncedSettings())) applySettings(snap.settings);
         if (snap.privatePass && stableStringify(snap.privatePass) !== stableStringify(privatePass)) {
             privatePass = snap.privatePass;
             writeJSON(STORAGE.privatePass, privatePass);
@@ -8199,7 +8272,8 @@
             folders: snap.folders,
             notes: snap.notes,
             deleted: snap.deleted,
-            ...(snap.privatePass ? { privatePass: snap.privatePass } : {})
+            ...(snap.privatePass ? { privatePass: snap.privatePass } : {}),
+            ...(snap.settings ? { settings: snap.settings } : {})
         };
         const result = await githubRequest('PUT', {
             message: `Remindate sync ${new Date().toISOString()}`,
@@ -8290,7 +8364,8 @@
                     app: 'Remindate', version: 1,
                     updatedAt: snap.updatedAt || new Date().toISOString(),
                     folders: snap.folders, notes: snap.notes, deleted: snap.deleted,
-                    ...(snap.privatePass ? { privatePass: snap.privatePass } : {})
+                    ...(snap.privatePass ? { privatePass: snap.privatePass } : {}),
+                    ...(snap.settings ? { settings: snap.settings } : {})
                 };
                 const r = await serverRequest('PUT', payload, rev);
                 serverConfig.remoteUpdatedAt = payload.updatedAt;
@@ -8559,7 +8634,8 @@
             folders: state.folders,
             notes: state.notes,
             deleted: state.deleted,
-            ...(privatePass ? { privatePass } : {})
+            ...(privatePass ? { privatePass } : {}),
+            ...(syncedSettings() ? { settings: syncedSettings() } : {})
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -8614,6 +8690,10 @@
                 state.folders = merged.folders;
             }
             // no pass on this device yet: take the one from the file
+            if (snap.settings) {
+                const mine = syncedSettings();
+                if (!mine || timeOf(snap.settings.at) > timeOf(mine.at)) applySettings(snap.settings);
+            }
             if (!privatePass && snap.privatePass) { privatePass = snap.privatePass; writeJSON(STORAGE.privatePass, privatePass); updatePassPanel(); }
             if (!noteById(state.currentNoteId)) state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
             state.currentFolderId = noteById(state.currentNoteId)?.folderId || null;
