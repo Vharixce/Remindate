@@ -4231,12 +4231,13 @@
     $('clockGrid').addEventListener('pointerup', endMarkDrag);
     $('clockGrid').addEventListener('pointercancel', endMarkDrag);
 
-    let lastSunDay = '';
+    let lastHourStamp = '';
     function updateClocks(now = new Date(), force = false) {
         const localOffset = -now.getTimezoneOffset();
-        const dayStamp = `${now.getUTCFullYear()}-${now.getUTCMonth()}-${now.getUTCDate()}-${now.getUTCHours()}`;
-        const sunNeeded = force || dayStamp !== lastSunDay;
-        lastSunDay = dayStamp;
+        const hourStamp = `${now.getUTCFullYear()}-${now.getUTCMonth()}-${now.getUTCDate()}-${now.getUTCHours()}`;
+        const newHour = force || hourStamp !== lastHourStamp; // time differences can change (summer/winter time)
+        lastHourStamp = hourStamp;
+        let dayChanged = false;
         document.querySelectorAll('#clockGrid .clock-card[data-clock-id]').forEach((card) => {
             const c = clockInfo(card.dataset.clockId);
             if (!c) return;
@@ -4247,26 +4248,32 @@
             set('.hand.second', p.s * 6);
             card.querySelector('.clock-digital').textContent = `${pad2(p.h)}:${pad2(p.min)}:${pad2(p.s)}`;
             card.querySelector('.clock-date').textContent = `${p.wd} ${p.d} ${MONTHS[p.m - 1]} ${p.y}`;
-            if (!sunNeeded) return;
-            const diff = zoneOffset(c.tz, now) - localOffset;
-            const h = Math.trunc(diff / 60), m = Math.abs(diff % 60);
-            card.querySelector('.clock-diff').textContent = c.local ? 'This device' : diff === 0 ? 'Same time as you'
-                : `${diff > 0 ? '+' : '−'}${Math.abs(h)}${m ? `:${pad2(m)}` : ''} h`;
-            let sunText = '', isDay = p.h >= 7 && p.h < 19;
-            if (c.lat !== null && c.lat !== undefined) {
-                const sun = sunTimes(c.lat, c.lon, p.y, p.m, p.d);
-                if (sun.polar === 'day') { sunText = '☀️ Sun up all day'; isDay = true; }
-                else if (sun.polar === 'night') { sunText = '🌙 Sun down all day'; isDay = false; }
-                else {
-                    sunText = `🌅 ${zoneHM(c.tz, sun.rise)} · 🌇 ${zoneHM(c.tz, sun.set)}`;
-                    isDay = now >= sun.rise && now < sun.set;
-                }
+            if (newHour) {
+                const diff = zoneOffset(c.tz, now) - localOffset;
+                const h = Math.trunc(diff / 60), m = Math.abs(diff % 60);
+                card.querySelector('.clock-diff').textContent = c.local ? 'This device' : diff === 0 ? 'Same time as you'
+                    : `${diff > 0 ? '+' : '−'}${Math.abs(h)}${m ? `:${pad2(m)}` : ''} h`;
             }
-            card.querySelector('.clock-sun').textContent = sunText;
-            updateRing(card, c, now);
-            card.querySelector('.clock-sun').title = sunText ? 'Sunrise · sunset today (local time there)' : '';
-            card.classList.toggle('night', !isDay);
+            // sunrise / sunset: worked out once per day there (new day there, or on first show)
+            const dayKey = `${p.y}-${p.m}-${p.d}`;
+            if (force || card._sunDay !== dayKey) {
+                card._sunDay = dayKey;
+                card._sun = c.lat !== null && c.lat !== undefined ? sunTimes(c.lat, c.lon, p.y, p.m, p.d) : null;
+                const sun = card._sun;
+                const sunText = !sun ? '' : sun.polar === 'day' ? '☀️ Sun up all day' : sun.polar === 'night' ? '🌙 Sun down all day'
+                    : `🌅 ${zoneHM(c.tz, sun.rise)} · 🌇 ${zoneHM(c.tz, sun.set)}`;
+                card.querySelector('.clock-sun').textContent = sunText;
+                card.querySelector('.clock-sun').title = sunText ? 'Sunrise · sunset today (local time there)' : '';
+                updateRing(card, c, now);
+                dayChanged = true;
+            }
+            // day or night there, checked every second: the face turns dark / light right at sunset / sunrise
+            const sun = card._sun;
+            const isDay = !sun ? p.h >= 7 && p.h < 19 : sun.polar ? sun.polar === 'day' : now >= sun.rise && now < sun.set;
+            if (card.classList.contains('night') === isDay) card.classList.toggle('night', !isDay);
         });
+        // the red marker's labels say "today" or the weekday: refresh them on a new day
+        if (dayChanged && !force && clockMark) updateClockMarks();
     }
 
     let clockTimer = null;
