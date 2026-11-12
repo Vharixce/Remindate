@@ -1507,13 +1507,13 @@ body.voice-dragging, body.voice-dragging * { cursor: grabbing !important; -webki
 }
 
 /* toolbars stay at the top while you scroll through a long note */
-#textToolbar, #drawToolbar, #gridToolbar {
+#textToolbar, #drawToolbar, #gridToolbar, #collageToolbar {
     position: sticky; top: -16px; z-index: 30;
     overflow: visible;
     box-shadow: 0 6px 14px -8px rgba(0, 0, 0, .7);
 }
 @media (max-width: 760px) {
-    #textToolbar, #drawToolbar, #gridToolbar { top: -12px; }
+    #textToolbar, #drawToolbar, #gridToolbar, #collageToolbar { top: -12px; }
 }
 .text-toolbar .tool-btn.active { background: rgba(124,111,240,.25); border-color: var(--primary); }
 
@@ -1526,9 +1526,9 @@ body.voice-dragging, body.voice-dragging * { cursor: grabbing !important; -webki
 .heading-btn { font-weight: 700; }
 @media (max-width: 760px) {
     /* one swipeable row instead of three lines of buttons */
-    #textToolbar .draw-tools { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
-    #textToolbar .draw-tools::-webkit-scrollbar { display: none; }
-    #textToolbar .draw-tools > * { flex-shrink: 0; }
+    #textToolbar .draw-tools, #collageToolbar .draw-tools { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; }
+    #textToolbar .draw-tools::-webkit-scrollbar, #collageToolbar .draw-tools::-webkit-scrollbar { display: none; }
+    #textToolbar .draw-tools > *, #collageToolbar .draw-tools > * { flex-shrink: 0; }
 }
 
 /* ---------- touch drag & drop ---------- */
@@ -1904,10 +1904,10 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
     position: sticky; top: -16px; z-index: 32;
     background: var(--bg); padding: 6px 0; margin: -6px 0;
 }
-#textToolbar, #drawToolbar, #gridToolbar { top: calc(var(--modebar-h, 48px) - 16px); }
+#textToolbar, #drawToolbar, #gridToolbar, #collageToolbar { top: calc(var(--modebar-h, 48px) - 16px); }
 @media (max-width: 760px) {
     #viewNote .editor-toolbar { top: -12px; }
-    #textToolbar, #drawToolbar, #gridToolbar { top: calc(var(--modebar-h, 48px) - 12px); }
+    #textToolbar, #drawToolbar, #gridToolbar, #collageToolbar { top: calc(var(--modebar-h, 48px) - 12px); }
 }
 .tool-btn.flash { background: rgba(124,111,240,.35); border-color: var(--primary); }
 
@@ -1941,3 +1941,58 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
     .editor-actions .folder-select { flex: 1 1 100%; max-width: none; min-width: 0; }
     .editor-actions .btn { flex: 1 1 auto; }
 }
+
+/* ---------- collage (a big board like Miro) ---------- */
+.collage-board {
+    position: relative; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none;
+    height: max(420px, calc(100dvh - 230px));
+    background-color: var(--card);
+    background-image: radial-gradient(circle, rgba(255, 255, 255, .13) 1px, transparent 1.4px);
+    border: 1px solid var(--border); border-radius: 8px; cursor: default;
+}
+.collage-board[data-tool="hand"] { cursor: grab; }
+.collage-board[data-tool="sticky"], .collage-board[data-tool="text"], .collage-board[data-tool="frame"], .collage-board[data-tool="arrow"] { cursor: crosshair; }
+.collage-board.panning, .collage-board.panning * { cursor: grabbing !important; }
+.cb-world { position: absolute; left: 0; top: 0; width: 0; height: 0; transform-origin: 0 0; --cbs: 1; }
+.cb-layer { position: absolute; left: 0; top: 0; }
+.cb-item { position: absolute; box-sizing: border-box; }
+.cb-sticky {
+    padding: 14px; border-radius: 3px; box-shadow: 0 4px 12px rgba(0, 0, 0, .35);
+    font-size: 16px; line-height: 1.35; overflow: hidden; overflow-wrap: anywhere;
+}
+.cb-text { min-height: 1.35em; outline: none; }
+.cb-sticky .cb-text { height: 100%; }
+.cb-textbox { width: max-content; min-width: 40px; padding: 4px 6px; font-size: 18px; line-height: 1.35; color: var(--text); min-height: 32px; overflow-wrap: anywhere; }
+.cb-textbox > .cb-text { min-height: 24px; }
+.cb-item .cb-text h1, .cb-item .cb-text h2, .cb-item .cb-text h3 { font-size: 1.6em; line-height: 1.2; margin: .1em 0; }
+.cb-item .cb-text ul, .cb-item .cb-text ol { margin: 0; padding-left: 1.3em; }
+.cb-item .cb-text img { max-width: 100%; }
+.cb-frame { border-radius: 4px; box-shadow: 0 0 0 1px rgba(0, 0, 0, .3), 0 2px 10px rgba(0, 0, 0, .25); }
+.cb-frame-title {
+    position: absolute; left: 0; bottom: 100%; padding-bottom: calc(6px / var(--cbs));
+    font-size: calc(14px / var(--cbs)); color: var(--muted); white-space: nowrap; cursor: move; outline: none;
+}
+.cb-frame.selected .cb-frame-title { color: var(--primary); }
+.cb-image img { display: block; width: 100%; height: 100%; object-fit: fill; pointer-events: none; border-radius: 2px; }
+.cb-item.selected { outline: calc(2px / var(--cbs)) solid var(--primary); outline-offset: calc(2px / var(--cbs)); }
+.cb-editing { cursor: text; }
+.cb-editing, .cb-editing * { user-select: text; -webkit-user-select: text; }
+.cb-handle {
+    position: absolute; right: calc(-8px / var(--cbs)); bottom: calc(-8px / var(--cbs));
+    width: calc(13px / var(--cbs)); height: calc(13px / var(--cbs));
+    background: #fff; border: calc(2px / var(--cbs)) solid var(--primary); border-radius: 3px; cursor: nwse-resize;
+}
+.cb-arrows { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
+.cb-arrow-hit { stroke: transparent; stroke-width: 16; fill: none; pointer-events: stroke; cursor: pointer; }
+.cb-arrow-line { fill: none; stroke-width: 2.5; stroke-linecap: round; }
+.cb-sel .cb-arrow-line, .cb-sel polygon { filter: drop-shadow(0 0 2px var(--primary)) drop-shadow(0 0 2px var(--primary)); }
+.cb-arrow-end { fill: #fff; stroke: var(--primary); pointer-events: all; cursor: move; }
+.cb-marquee { position: absolute; border: 1px dashed var(--primary); background: rgba(124, 111, 240, .12); pointer-events: none; }
+.cb-empty {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); text-align: center;
+    color: var(--muted); font-size: 14px; pointer-events: none; padding: 0 20px; width: 100%; box-sizing: border-box;
+}
+.cb-colors .text-color { width: 18px; height: 18px; }
+.collage-toolbar .tool-btn:disabled { opacity: .4; }
+.cb-zoom { min-width: 52px; }
+.cb-textbox.cb-editing { min-width: 160px; }

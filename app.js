@@ -468,7 +468,8 @@
         const preview = note.private ? '🔒 Private note' : note.content.trim()
             ? note.content.replace(/\s+/g, ' ').trim().slice(0, 60)
             : (hasImages(note) ? 'Image' : hasVoice(note) ? 'Voice note' : note.strokes.length ? 'Drawing'
-                : Object.values(note.grids || {}).some((g) => g && Object.keys(g).length) ? 'Grid' : 'Empty note');
+                : Object.values(note.grids || {}).some((g) => g && Object.keys(g).length) ? 'Grid'
+                : note.collage && note.collage.items && note.collage.items.length ? 'Collage' : 'Empty note');
         let meta = '';
         if (note.scheduledAt) {
             const next = isRecurring(note) ? nextOccurrence(note, Date.now()) : null;
@@ -1186,6 +1187,7 @@
             editorEl.innerHTML = '';
             $('noteFolder').innerHTML = folderOptions('');
             state.draw.strokes = [];
+            loadCollage(null);
             updateScheduleUi(null);
             setMode('text');
             return;
@@ -1204,6 +1206,7 @@
 
         drawSel = null;
         state.draw.strokes = note.strokes.map(copyStroke);
+        loadCollage(note);
 
         setMode(state.prefs.mode);
         fitCanvas();
@@ -1279,6 +1282,7 @@
         if (!locked) return false;
         // keep nothing of the note in the editor while it is locked
         stopVoicePlayback();
+        loadCollage(null);
         editorEl.innerHTML = '';
         $('noteTitle').value = '';
         state.draw.strokes = [];
@@ -5960,10 +5964,14 @@
     });
 
     function setMode(mode) {
-        if (!['text', 'draw', 'grid'].includes(mode)) mode = 'text';
+        if (!['text', 'collage', 'draw', 'grid'].includes(mode)) mode = 'text';
+        if (mode !== 'collage' && typeof cbEndEdit === 'function') cbEndEdit(true);
         state.prefs.mode = mode;
         savePrefs();
         $('modeText').classList.toggle('active', mode === 'text');
+        $('modeCollage').classList.toggle('active', mode === 'collage');
+        $('collageBoard').style.display = mode === 'collage' ? 'block' : 'none';
+        $('collageToolbar').style.display = mode === 'collage' ? 'block' : 'none';
         $('modeDraw').classList.toggle('active', mode === 'draw');
         $('modeGrid').classList.toggle('active', mode === 'grid');
         editorEl.style.display = mode === 'text' ? 'block' : 'none';
@@ -5973,6 +5981,10 @@
         gridContainer.style.display = mode === 'grid' ? 'block' : 'none';
         $('gridToolbar').style.display = mode === 'grid' ? 'block' : 'none';
         $('zoomHint').style.display = mode === 'text' ? 'none' : 'block';
+        $('zoomHint').textContent = mode === 'collage'
+            ? 'Scroll to zoom · drag with the middle mouse button (or hold Space) to move · double-click to add a sticky note · pinch with two fingers on a phone'
+            : 'Pinch with two fingers to zoom and move · Ctrl + scroll to zoom and middle mouse button to move on a computer';
+        if (mode === 'collage') requestAnimationFrame(cbShow);
         if (mode === 'draw') {
             requestAnimationFrame(() => {
                 fitCanvas();
@@ -5983,8 +5995,913 @@
     }
 
     $('modeText').addEventListener('click', () => setMode('text'));
+    $('modeCollage').addEventListener('click', () => setMode('collage'));
     $('modeDraw').addEventListener('click', () => setMode('draw'));
     $('modeGrid').addEventListener('click', () => setMode('grid'));
+
+    /* ---------------- collage mode: a big board (like Miro) ----------------
+     * note.collage = { items: [...] } with items:
+     *   sticky { x, y, w, h, color, html }   text { x, y, w, html, color }
+     *   frame  { x, y, w, h, color, title }  image { x, y, w, h, src }
+     *   arrow  { from, to, color }  (an end is { id } of a thing, or a free point { x, y })
+     * All positions are board units; the view (pan + zoom) is kept per note while the app is open. */
+    const cbBoard = $('collageBoard');
+    const cbWorld = $('cbWorld');
+    const cbFramesEl = $('cbFrames');
+    const cbItemsEl = $('cbItems');
+    const cbSvg = $('cbArrows');
+    const cbMarquee = $('cbMarquee');
+    const CB_COLORS = [
+        ['#fff9b1', 'Light yellow'], ['#f5d128', 'Yellow'], ['#ff9d48', 'Orange'], ['#f24726', 'Red'],
+        ['#ea94bb', 'Pink'], ['#be88c7', 'Violet'], ['#a6ccf5', 'Light blue'], ['#2d9bf0', 'Blue'],
+        ['#67c6c0', 'Teal'], ['#8fd14f', 'Green'], ['#ffffff', 'White'], ['#e6e6e6', 'Light grey'],
+        ['#808080', 'Grey'], ['#1a1a1a', 'Black']
+    ];
+    const CB_DEFAULT = { sticky: '#fff9b1', frame: '#ffffff', arrow: '#cbd5e1' };
+    const cb = { items: [], view: { x: 40, y: 40, s: 1 }, tool: 'select', sel: new Set(), editing: null,
+        editStart: null, undo: [], redo: [], noteId: null, needFit: true };
+    const cbViews = new Map();
+    const cbEls = new Map();
+    let cbClipboard = null;
+    let cbSpace = false;
+    const CB_MARK = 'remindate-collage-copy';
+
+    const cbById = (id) => cb.items.find((i) => i.id === id) || null;
+    const cbActive = () => state.prefs.mode === 'collage' && state.prefs.activeTab !== 'calendar' && !!cb.noteId &&
+        !document.querySelector('.modal.active') && !isPrivateLocked(noteById(cb.noteId));
+    const cbClone = (v) => JSON.parse(JSON.stringify(v));
+    function textOn(hex) {
+        const m = /^#?([0-9a-f]{6})$/i.exec(hex || '');
+        if (!m) return '#1f2937';
+        const n = parseInt(m[1], 16);
+        const lum = (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+        return lum > 0.55 ? '#1f2937' : '#f9fafb';
+    }
+    const cbColorPref = (type) => (state.prefs.collageColors && state.prefs.collageColors[type]) || CB_DEFAULT[type];
+
+    function loadCollage(note) {
+        cbEndEdit(true);
+        cb.noteId = note ? note.id : null;
+        cb.items = note && note.collage && Array.isArray(note.collage.items) ? cbClone(note.collage.items) : [];
+        cb.sel = new Set();
+        cb.undo = []; cb.redo = [];
+        cbEls.forEach((el) => el.remove());
+        cbEls.clear();
+        const v = note && cbViews.get(note.id);
+        if (v) { cb.view = { ...v }; cb.needFit = false; } else cb.needFit = true;
+        if (state.prefs.mode === 'collage') cbShow();
+        else cbUpdateToolbar();
+    }
+    function cbShow() {
+        if (cb.needFit) cbFit(); else { cbApplyView(); cbRender(); }
+    }
+    function cbSave() {
+        const note = noteById(cb.noteId);
+        if (!note || isPrivateLocked(note)) return;
+        note.collage = { items: cbClone(cb.items) };
+        touch(note);
+    }
+    function cbRecord() {
+        cb.undo.push(JSON.stringify(cb.items));
+        if (cb.undo.length > 150) cb.undo.shift();
+        cb.redo = [];
+    }
+    function cbUndoRedo(back) {
+        cbEndEdit(true);
+        const from = back ? cb.undo : cb.redo, to = back ? cb.redo : cb.undo;
+        if (!from.length) return;
+        to.push(JSON.stringify(cb.items));
+        cb.items = JSON.parse(from.pop());
+        cb.sel = new Set([...cb.sel].filter((id) => cbById(id)));
+        cbRender();
+        cbSave();
+    }
+
+    /* ---- view (pan + zoom) ---- */
+    function cbApplyView() {
+        const { x, y, s } = cb.view;
+        cbWorld.style.transform = `translate(${x}px, ${y}px) scale(${s})`;
+        cbWorld.style.setProperty('--cbs', s);
+        cbBoard.style.backgroundSize = `${24 * s}px ${24 * s}px`;
+        cbBoard.style.backgroundPosition = `${x}px ${y}px`;
+        $('cbZoom').textContent = `${Math.round(s * 100)}%`;
+        if (cb.noteId) cbViews.set(cb.noteId, { ...cb.view });
+    }
+    function cbZoomAt(mx, my, k) {
+        const s = cb.view.s, s2 = Math.min(4, Math.max(0.1, s * k));
+        cb.view.x = mx - (mx - cb.view.x) * s2 / s;
+        cb.view.y = my - (my - cb.view.y) * s2 / s;
+        cb.view.s = s2;
+        cbApplyView();
+        cbRenderArrows(); // the end handles keep their screen size
+    }
+    function cbBounds(items) {
+        let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity;
+        items.forEach((it) => {
+            if (it.type === 'arrow') {
+                const [a, b] = cbArrowPoints(it);
+                [a, b].forEach((p) => { x1 = Math.min(x1, p.x); y1 = Math.min(y1, p.y); x2 = Math.max(x2, p.x); y2 = Math.max(y2, p.y); });
+                return;
+            }
+            const r = cbRect(it);
+            x1 = Math.min(x1, r.x - (it.type === 'frame' ? 0 : 0)); y1 = Math.min(y1, r.y - (it.type === 'frame' ? 24 : 0));
+            x2 = Math.max(x2, r.x + r.w); y2 = Math.max(y2, r.y + r.h);
+        });
+        return x1 === Infinity ? null : { x: x1, y: y1, w: x2 - x1, h: y2 - y1 };
+    }
+    function cbFit() {
+        cb.needFit = false;
+        if (cbBoard.style.display === 'none' || !cbBoard.clientWidth) { cbRender(); return; }
+        cbRender();
+        const W = cbBoard.clientWidth, H = cbBoard.clientHeight;
+        const b = cbBounds(cb.items);
+        if (!b) { cb.view = { x: W / 2, y: H / 2, s: 1 }; }
+        else {
+            const s = Math.min(1, Math.max(0.1, Math.min((W - 80) / Math.max(1, b.w), (H - 80) / Math.max(1, b.h))));
+            cb.view = { s, x: W / 2 - (b.x + b.w / 2) * s, y: H / 2 - (b.y + b.h / 2) * s };
+        }
+        cbApplyView();
+        cbRenderArrows();
+    }
+
+    /* ---- drawing the board ---- */
+    function cbRect(it) {
+        if (it.type === 'text') {
+            const el = cbEls.get(it.id);
+            return { x: it.x, y: it.y, w: el && el.offsetWidth ? el.offsetWidth : it.w, h: el && el.offsetHeight ? el.offsetHeight : (it.h || 32) };
+        }
+        return { x: it.x, y: it.y, w: it.w, h: it.h };
+    }
+    function cbEndCenter(end) {
+        const it = end && end.id ? cbById(end.id) : null;
+        if (it) { const r = cbRect(it); return { x: r.x + r.w / 2, y: r.y + r.h / 2 }; }
+        return { x: (end && end.x) || 0, y: (end && end.y) || 0 };
+    }
+    function cbAnchor(end, toward) {
+        const it = end && end.id ? cbById(end.id) : null;
+        if (!it) return cbEndCenter(end);
+        const r = cbRect(it);
+        const cx = r.x + r.w / 2, cy = r.y + r.h / 2, dx = toward.x - cx, dy = toward.y - cy;
+        if (!dx && !dy) return { x: cx, y: cy };
+        const gap = 6;
+        const t = Math.min(dx ? (r.w / 2 + gap) / Math.abs(dx) : Infinity, dy ? (r.h / 2 + gap) / Math.abs(dy) : Infinity, 1);
+        return { x: cx + dx * t, y: cy + dy * t };
+    }
+    function cbArrowPoints(a) {
+        const c1 = cbEndCenter(a.from), c2 = cbEndCenter(a.to);
+        return [cbAnchor(a.from, c2), cbAnchor(a.to, c1)];
+    }
+    function cbRenderArrows() {
+        const s = cb.view.s;
+        let out = '';
+        cb.items.forEach((a) => {
+            if (a.type !== 'arrow') return;
+            const [p1, p2] = cbArrowPoints(a);
+            const dx = p2.x - p1.x, dy = p2.y - p1.y, len = Math.hypot(dx, dy) || 1;
+            const ux = dx / len, uy = dy / len;
+            const hl = Math.min(16, len * 0.6), hw = hl * 0.55;
+            const bx = p2.x - ux * hl, by = p2.y - uy * hl;
+            const color = escapeHtml(a.color || CB_DEFAULT.arrow);
+            const sel = cb.sel.has(a.id);
+            out += `<g data-arrow="${a.id}" class="${sel ? 'cb-sel' : ''}">` +
+                `<path class="cb-arrow-hit" d="M${p1.x} ${p1.y}L${p2.x} ${p2.y}"/>` +
+                `<path class="cb-arrow-line" stroke="${color}" d="M${p1.x} ${p1.y}L${bx} ${by}"/>` +
+                `<polygon fill="${color}" points="${p2.x},${p2.y} ${bx - uy * hw},${by + ux * hw} ${bx + uy * hw},${by - ux * hw}"/>` +
+                (sel && cb.sel.size === 1 ? `<circle class="cb-arrow-end" data-end="from" cx="${p1.x}" cy="${p1.y}" r="${7 / s}" stroke-width="${2 / s}"/>` +
+                    `<circle class="cb-arrow-end" data-end="to" cx="${p2.x}" cy="${p2.y}" r="${7 / s}" stroke-width="${2 / s}"/>` : '') +
+                '</g>';
+        });
+        cbSvg.innerHTML = out;
+    }
+    function cbRender() {
+        const seen = new Set();
+        const idx = { frame: 0, other: 0 };
+        const single = cb.sel.size === 1 ? [...cb.sel][0] : null;
+        cb.items.forEach((it) => {
+            if (it.type === 'arrow') return;
+            seen.add(it.id);
+            let el = cbEls.get(it.id);
+            if (!el) {
+                el = document.createElement('div');
+                el.className = `cb-item cb-${it.type === 'text' ? 'textbox' : it.type}`;
+                el.dataset.id = it.id;
+                el.innerHTML = it.type === 'frame' ? '<div class="cb-frame-title" spellcheck="false"></div>'
+                    : it.type === 'image' ? '<img draggable="false" alt="">' : '<div class="cb-text"></div>';
+                cbEls.set(it.id, el);
+            }
+            const layer = it.type === 'frame' ? cbFramesEl : cbItemsEl;
+            const key = it.type === 'frame' ? 'frame' : 'other';
+            if (layer.children[idx[key]] !== el) layer.insertBefore(el, layer.children[idx[key]] || null);
+            idx[key]++;
+            el.style.left = `${it.x}px`;
+            el.style.top = `${it.y}px`;
+            if (it.type === 'text') el.style.maxWidth = `${it.w}px`;
+            else { el.style.width = `${it.w}px`; el.style.height = `${it.h}px`; }
+            if (it.type === 'sticky') { el.style.background = it.color || CB_DEFAULT.sticky; el.style.color = textOn(it.color || CB_DEFAULT.sticky); }
+            if (it.type === 'frame') {
+                el.style.background = it.color || CB_DEFAULT.frame;
+                const t = el.firstChild;
+                if (cb.editing !== it.id && t.textContent !== (it.title || 'Frame')) t.textContent = it.title || 'Frame';
+            }
+            if (it.type === 'text') el.style.color = it.color || '';
+            if (it.type === 'image') { const img = el.firstChild; if (img.getAttribute('src') !== it.src) img.src = it.src; }
+            const t = el.querySelector('.cb-text');
+            if (t && cb.editing !== it.id && el._html !== it.html) { t.innerHTML = sanitizeHtml(it.html || ''); el._html = it.html; }
+            el.classList.toggle('selected', cb.sel.has(it.id));
+            let handle = el.querySelector(':scope > .cb-handle');
+            if (single === it.id && cb.editing !== it.id) {
+                if (!handle) { handle = document.createElement('div'); handle.className = 'cb-handle'; el.appendChild(handle); }
+            } else if (handle) handle.remove();
+        });
+        cbEls.forEach((el, id) => { if (!seen.has(id)) { el.remove(); cbEls.delete(id); } });
+        cbRenderArrows();
+        $('cbEmpty').hidden = cb.items.length > 0;
+        cbUpdateToolbar();
+    }
+    function cbUpdateToolbar() {
+        document.querySelectorAll('[data-cb-tool]').forEach((b) => b.classList.toggle('active', b.dataset.cbTool === cb.tool));
+        cbBoard.dataset.tool = cb.tool;
+        $('cbUndo').disabled = !cb.undo.length;
+        $('cbRedo').disabled = !cb.redo.length;
+        const none = !cb.sel.size;
+        ['cbDup', 'cbFront', 'cbBack', 'cbDelete'].forEach((id) => { $(id).disabled = none; });
+    }
+    function cbSetTool(tool) {
+        cbEndEdit(true);
+        cb.tool = tool;
+        cbUpdateToolbar();
+    }
+
+    /* ---- adding things ---- */
+    function cbAdd(item, select = true) {
+        item.id = uid();
+        cb.items.push(item);
+        if (select) cb.sel = new Set([item.id]);
+        return item;
+    }
+    function cbViewCenter() {
+        return { x: (cbBoard.clientWidth / 2 - cb.view.x) / cb.view.s, y: (cbBoard.clientHeight / 2 - cb.view.y) / cb.view.s };
+    }
+    function cbNewSticky(p) {
+        cbRecord();
+        const it = cbAdd({ type: 'sticky', x: p.x - 100, y: p.y - 100, w: 200, h: 200, color: cbColorPref('sticky'), html: '' });
+        cbRender();
+        cbSave();
+        cbStartEdit(it.id, true);
+    }
+    function cbNewText(p) {
+        cbRecord();
+        const it = cbAdd({ type: 'text', x: p.x, y: p.y - 16, w: 280, html: '' });
+        cbRender();
+        cbStartEdit(it.id, true);
+    }
+    function cbNewFrame(x, y, w, h) {
+        const n = cb.items.filter((i) => i.type === 'frame').length + 1;
+        return cbAdd({ type: 'frame', x, y, w, h, color: cbColorPref('frame'), title: `Frame ${n}` });
+    }
+    async function cbAddImages(files, at) {
+        const note = noteById(cb.noteId);
+        if (!note || isPrivateLocked(note)) return;
+        const images = [...files].filter((f) => f.type && f.type.startsWith('image/'));
+        if (!images.length) return;
+        const p = at || cbViewCenter();
+        let recorded = false, offset = 0;
+        const added = [];
+        for (const file of images) {
+            try {
+                const src = await imageFileToDataUrl(file);
+                const img = new Image();
+                img.src = src;
+                await (img.decode ? img.decode().catch(() => {}) : new Promise((r) => { img.onload = img.onerror = r; }));
+                const nw = img.naturalWidth || 300, nh = img.naturalHeight || 200;
+                const w = Math.min(400, nw), h = w * nh / nw;
+                if (!recorded) { cbRecord(); recorded = true; }
+                added.push(cbAdd({ type: 'image', x: p.x - w / 2 + offset, y: p.y - h / 2 + offset, w, h, src }, false).id);
+                offset += 30;
+            } catch (err) {
+                toast(`Could not load image: ${file.name}`);
+            }
+        }
+        if (added.length) { cb.sel = new Set(added); cbRender(); cbSave(); }
+    }
+
+    /* ---- editing text in a sticky note, a text or a frame title ---- */
+    function cbStartEdit(id, fresh = false) {
+        const it = cbById(id), el = cbEls.get(id);
+        if (!it || !el || !['sticky', 'text', 'frame'].includes(it.type)) return;
+        cbEndEdit(true);
+        cb.editing = id;
+        cb.editStart = fresh ? null : JSON.stringify(cb.items);
+        if (!fresh) cbRecord();
+        cb.sel = new Set([id]);
+        const t = it.type === 'frame' ? el.firstChild : el.querySelector('.cb-text');
+        el.classList.add('cb-editing');
+        t.contentEditable = 'true';
+        cbRender();
+        t.focus({ preventScroll: true });
+        const r = document.createRange();
+        r.selectNodeContents(t);
+        if (it.type !== 'frame') r.collapse(false);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+    }
+    function cbEndEdit(save = true) {
+        if (!cb.editing) return;
+        const id = cb.editing;
+        const it = cbById(id), el = cbEls.get(id);
+        cb.editing = null;
+        if (!it || !el) return;
+        const t = it.type === 'frame' ? el.firstChild : el.querySelector('.cb-text');
+        t.contentEditable = 'false';
+        el.classList.remove('cb-editing');
+        if (it.type === 'frame') it.title = t.textContent.trim() || 'Frame';
+        else {
+            it.html = sanitizeHtml(t.innerHTML);
+            el._html = null;
+            if (it.type === 'text' && !htmlToText(it.html).trim() && !/<img/i.test(it.html)) {
+                cb.items = cb.items.filter((i) => i !== it); // an empty text disappears
+                cb.sel.delete(id);
+            }
+        }
+        if (cb.editStart !== null && cb.editStart === JSON.stringify(cb.items)) cb.undo.pop(); // nothing changed
+        cb.editStart = null;
+        if (window.getSelection().rangeCount && t.contains(window.getSelection().anchorNode)) window.getSelection().removeAllRanges();
+        if (save) cbSave();
+        cbRender();
+    }
+    // focus left the text (and not to the toolbar): stop editing
+    cbBoard.addEventListener('focusout', (e) => {
+        if (!cb.editing) return;
+        if (e.relatedTarget && $('collageToolbar').contains(e.relatedTarget)) return;
+        const id = cb.editing;
+        setTimeout(() => {
+            const el = cbEls.get(id);
+            if (cb.editing === id && !(el && el.contains(document.activeElement))) cbEndEdit(true);
+        }, 0);
+    });
+    cbBoard.addEventListener('keydown', (e) => {
+        if (!cb.editing) return;
+        const it = cbById(cb.editing);
+        if (e.key === 'Escape' || (it && it.type === 'frame' && e.key === 'Enter')) { e.preventDefault(); cbEndEdit(true); }
+        e.stopPropagation(); // typing never triggers the board shortcuts
+    });
+
+    /* ---- formatting (same options as in Text) ---- */
+    function cbFormat(fn) {
+        if (cb.editing) {
+            const el = cbEls.get(cb.editing);
+            const t = el && (el.querySelector('.cb-text'));
+            if (t) { t.focus({ preventScroll: true }); fn(t); }
+            return;
+        }
+        // selected sticky notes / texts: format all of their text
+        const ids = [...cb.sel].filter((id) => { const it = cbById(id); return it && (it.type === 'sticky' || it.type === 'text'); });
+        if (!ids.length) { toast('Select a sticky note or text first (double-click to type in it)'); return; }
+        cbRecord();
+        const sel = window.getSelection();
+        ids.forEach((id) => {
+            const el = cbEls.get(id), t = el.querySelector('.cb-text');
+            t.contentEditable = 'true';
+            t.focus({ preventScroll: true });
+            const r = document.createRange();
+            r.selectNodeContents(t);
+            sel.removeAllRanges();
+            sel.addRange(r);
+            fn(t);
+            const it = cbById(id);
+            it.html = sanitizeHtml(t.innerHTML);
+            el._html = null;
+            t.contentEditable = 'false';
+        });
+        sel.removeAllRanges();
+        cbRender();
+        cbSave();
+    }
+    function cbTextColor(t, color) {
+        try { document.execCommand('styleWithCSS', false, false); } catch (_) {}
+        if (color) { document.execCommand('foreColor', false, color); return; }
+        const MARK = '#010203';
+        document.execCommand('foreColor', false, MARK);
+        t.querySelectorAll('font[color], span[style*="color"]').forEach((el) => {
+            const c = el.tagName === 'FONT' ? el.getAttribute('color') : cssColorToHex(el.style.color);
+            if (cssColorToHex(c) !== MARK) return;
+            el.querySelectorAll('font[color], span[style*="color"]').forEach((inner) => inner.replaceWith(...inner.childNodes));
+            el.replaceWith(...el.childNodes);
+        });
+    }
+    $('cbTextColors').innerHTML = TEXT_COLORS.map(([c, name]) =>
+        `<button type="button" class="text-color${c ? '' : ' reset'}" data-cb-text-color="${c}" title="${name}" style="${c ? `background:${c}` : ''}">${c ? '' : 'A'}</button>`).join('');
+    $('cbColors').innerHTML = CB_COLORS.map(([c, name]) =>
+        `<button type="button" class="text-color" data-cb-color="${c}" title="${name}" style="background:${c}"></button>`).join('');
+
+    // toolbar buttons keep the text cursor where it is
+    $('collageToolbar').addEventListener('pointerdown', (e) => {
+        if (e.target.closest('button')) e.preventDefault();
+    });
+    $('collageToolbar').addEventListener('click', (e) => {
+        if (!noteById(cb.noteId) || isPrivateLocked(noteById(cb.noteId))) return;
+        const tool = e.target.closest('[data-cb-tool]');
+        if (tool) { cbSetTool(tool.dataset.cbTool); return; }
+        const cmd = e.target.closest('[data-cb-cmd]');
+        if (cmd) { cbFormat(() => document.execCommand(cmd.dataset.cbCmd, false, null)); return; }
+        const tc = e.target.closest('[data-cb-text-color]');
+        if (tc) { cbFormat((t) => cbTextColor(t, tc.dataset.cbTextColor)); return; }
+        const col = e.target.closest('[data-cb-color]');
+        if (col) { cbColor(col.dataset.cbColor); return; }
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        switch (btn.id) {
+            case 'cbHeading':
+                cbFormat((t) => {
+                    const s = window.getSelection();
+                    const n = s.rangeCount ? s.anchorNode : null;
+                    const inH = n && (n.nodeType === 1 ? n : n.parentElement).closest('h1, h2, h3');
+                    document.execCommand('formatBlock', false, inH && t.contains(inH) ? '<div>' : '<h2>');
+                });
+                break;
+            case 'cbImageBtn': $('cbImageFile').click(); break;
+            case 'cbUndo': cbUndoRedo(true); break;
+            case 'cbRedo': cbUndoRedo(false); break;
+            case 'cbDup': cbDuplicate(); break;
+            case 'cbFront': cbOrder(true); break;
+            case 'cbBack': cbOrder(false); break;
+            case 'cbDelete': cbDelete(); break;
+            case 'cbZoom': cbZoomAt(cbBoard.clientWidth / 2, cbBoard.clientHeight / 2, 1 / cb.view.s); break;
+            case 'cbFit': cbFit(); break;
+        }
+    });
+    $('cbImageFile').addEventListener('change', (e) => {
+        cbAddImages(e.target.files);
+        e.target.value = '';
+    });
+
+    // colour of the selected sticky notes / frames / arrows / texts (also the colour for new ones)
+    function cbColor(color) {
+        const ids = [...cb.sel].filter((id) => cbById(id) && cbById(id).type !== 'image');
+        const prefs = state.prefs.collageColors = state.prefs.collageColors || {};
+        if (!ids.length) {
+            // nothing selected: the colour for the next sticky note
+            prefs.sticky = color;
+            savePrefs();
+            toast('New sticky notes get this colour');
+            return;
+        }
+        if (cb.editing) cbEndEdit(true);
+        cbRecord();
+        ids.forEach((id) => {
+            const it = cbById(id);
+            it.color = color;
+            if (it.type !== 'text') prefs[it.type] = color;
+        });
+        savePrefs();
+        cbRender();
+        cbSave();
+    }
+
+    /* ---- selection actions ---- */
+    const cbInside = (r, f) => r.x >= f.x && r.y >= f.y && r.x + r.w <= f.x + f.w && r.y + r.h <= f.y + f.h;
+    // the selection plus everything inside selected frames
+    function cbExpanded(ids) {
+        const out = new Set(ids);
+        cb.items.forEach((f) => {
+            if (f.type !== 'frame' || !ids.has(f.id)) return;
+            const fr = cbRect(f);
+            cb.items.forEach((it) => {
+                if (it === f || out.has(it.id)) return;
+                if (it.type === 'arrow') {
+                    const [a, b] = cbArrowPoints(it);
+                    if (cbInside({ x: a.x, y: a.y, w: 0, h: 0 }, fr) && cbInside({ x: b.x, y: b.y, w: 0, h: 0 }, fr)) out.add(it.id);
+                } else if (cbInside(cbRect(it), fr)) out.add(it.id);
+            });
+        });
+        return out;
+    }
+    function cbCopies(list, dx, dy) {
+        const map = new Map();
+        const copies = list.filter((it) => it.type !== 'arrow').map((it) => {
+            const c = cbClone(it);
+            c.id = uid();
+            map.set(it.id, c.id);
+            c.x += dx; c.y += dy;
+            return c;
+        });
+        list.filter((it) => it.type === 'arrow').forEach((a) => {
+            const c = cbClone(a);
+            c.id = uid();
+            ['from', 'to'].forEach((k) => {
+                if (c[k].id) {
+                    if (map.has(c[k].id)) c[k] = { id: map.get(c[k].id) };
+                    else { const p = cbEndCenter(a[k]); c[k] = { x: p.x + dx, y: p.y + dy }; }
+                } else { c[k] = { x: c[k].x + dx, y: c[k].y + dy }; }
+            });
+            copies.push(c);
+        });
+        return copies;
+    }
+    function cbDuplicate() {
+        if (!cb.sel.size) return;
+        cbEndEdit(true);
+        cbRecord();
+        const ids = cbExpanded(cb.sel);
+        const copies = cbCopies(cb.items.filter((it) => ids.has(it.id)), 24, 24);
+        cb.items.push(...copies);
+        cb.sel = new Set(copies.map((c) => c.id));
+        cbRender();
+        cbSave();
+    }
+    function cbDelete() {
+        if (!cb.sel.size) return;
+        cbEndEdit(true);
+        cbRecord();
+        const gone = new Set(cb.sel);
+        // arrows attached to something that is deleted keep their end where it was
+        cb.items.forEach((a) => {
+            if (a.type !== 'arrow' || gone.has(a.id)) return;
+            const [p1, p2] = cbArrowPoints(a);
+            if (a.from.id && gone.has(a.from.id)) a.from = { x: p1.x, y: p1.y };
+            if (a.to.id && gone.has(a.to.id)) a.to = { x: p2.x, y: p2.y };
+        });
+        cb.items = cb.items.filter((it) => !gone.has(it.id));
+        cb.sel = new Set();
+        cbRender();
+        cbSave();
+    }
+    function cbOrder(front) {
+        if (!cb.sel.size) return;
+        cbRecord();
+        const picked = cb.items.filter((it) => cb.sel.has(it.id));
+        const rest = cb.items.filter((it) => !cb.sel.has(it.id));
+        cb.items = front ? [...rest, ...picked] : [...picked, ...rest];
+        cbRender();
+        cbSave();
+    }
+    function cbPaste(list, at) {
+        const b = cbBounds(list);
+        if (!b) return;
+        const p = at || cbViewCenter();
+        cbRecord();
+        const copies = cbCopies(list, p.x - (b.x + b.w / 2), p.y - (b.y + b.h / 2));
+        cb.items.push(...copies);
+        cb.sel = new Set(copies.map((c) => c.id));
+        cbRender();
+        cbSave();
+    }
+
+    /* ---- mouse / touch on the board ---- */
+    const cbPointers = new Map();
+    let cbAct = null;
+    let cbLastTap = null;
+    let cbDownTarget = null;
+    let cbMiddleAt = 0; // Linux pastes with the middle mouse button: not on the board
+    function cbWorldPt(e) {
+        const r = cbBoard.getBoundingClientRect();
+        return { x: (e.clientX - r.left - cbBoard.clientLeft - cb.view.x) / cb.view.s, y: (e.clientY - r.top - cbBoard.clientTop - cb.view.y) / cb.view.s };
+    }
+    function cbLocal(e) {
+        const r = cbBoard.getBoundingClientRect();
+        return { x: e.clientX - r.left - cbBoard.clientLeft, y: e.clientY - r.top - cbBoard.clientTop };
+    }
+    // the sticky note / text / image / frame under a screen point (for the ends of an arrow)
+    function cbItemAt(clientX, clientY, not) {
+        const els = document.elementsFromPoint(clientX, clientY);
+        for (const el of els) {
+            const item = el.closest && el.closest('.cb-item');
+            if (item && cbBoard.contains(item) && item.dataset.id !== not) return cbById(item.dataset.id);
+        }
+        return null;
+    }
+    function cbStartPan(e) {
+        cbAct = { type: 'pan', sx: e.clientX, sy: e.clientY, vx: cb.view.x, vy: cb.view.y };
+        cbBoard.classList.add('panning');
+    }
+
+    cbBoard.addEventListener('pointerdown', (e) => {
+        if (!cbActive()) return;
+        if (cb.editing && e.target.closest('.cb-editing') && e.button === 0) return; // place the text cursor
+        cbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        try { cbBoard.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
+        if (cbPointers.size === 2) {
+            // two fingers: zoom and move
+            if (cbAct && cbAct.recorded && cbAct.type !== 'pan') { cb.items = JSON.parse(cb.undo.pop()); cbRender(); }
+            const [a, b] = [...cbPointers.values()];
+            const r = cbBoard.getBoundingClientRect();
+            cbAct = { type: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, cx: (a.x + b.x) / 2 - r.left, cy: (a.y + b.y) / 2 - r.top, v0: { ...cb.view } };
+            cbMarquee.hidden = true;
+            return;
+        }
+        if (cbPointers.size > 2) return;
+        cbDownTarget = e.target; // (the pointer is captured: pointerup is always on the board)
+        e.preventDefault(); // no mouse focus change: a new text keeps its cursor
+        const ae = document.activeElement;
+        if (ae && ae !== document.body && !cbBoard.contains(ae) && ae.blur) ae.blur();
+        if (cb.editing) cbEndEdit(true);
+        const p = cbWorldPt(e);
+        if (e.button === 1) cbMiddleAt = Date.now();
+        if (e.button === 1 || (e.button === 0 && (cb.tool === 'hand' || cbSpace))) { e.preventDefault(); cbStartPan(e); return; }
+        if (e.button !== 0) return;
+        const tool = cb.tool;
+        if (tool === 'sticky') { cbSetTool('select'); cbNewSticky(p); return; }
+        if (tool === 'text') { cbSetTool('select'); cbNewText(p); return; }
+        if (tool === 'frame') { cbAct = { type: 'newframe', start: p, id: null }; return; }
+        if (tool === 'arrow') {
+            const hit = cbItemAt(e.clientX, e.clientY);
+            cbAct = { type: 'newarrow', start: p, from: hit ? { id: hit.id } : { x: p.x, y: p.y }, fromId: hit ? hit.id : null, id: null };
+            return;
+        }
+        // select tool
+        const end = e.target.closest('.cb-arrow-end');
+        if (end) {
+            const id = end.parentNode.dataset.arrow;
+            cbAct = { type: 'arrowend', id, which: end.dataset.end, recorded: false };
+            return;
+        }
+        if (e.target.closest('.cb-handle')) {
+            const it = cbById([...cb.sel][0]);
+            if (!it) return;
+            const r = cbRect(it);
+            cbAct = { type: 'resize', id: it.id, start: p, w: it.type === 'text' ? r.w : r.w, h: r.h, ratio: r.h / Math.max(1, r.w), recorded: false };
+            return;
+        }
+        const arrowG = e.target.closest('[data-arrow]');
+        const itemEl = e.target.closest('.cb-item');
+        const onFrameBody = itemEl && itemEl.classList.contains('cb-frame') && !e.target.closest('.cb-frame-title');
+        const id = arrowG ? arrowG.dataset.arrow : (itemEl && !onFrameBody ? itemEl.dataset.id : null);
+        if (id) {
+            if (e.shiftKey) {
+                if (cb.sel.has(id)) cb.sel.delete(id); else cb.sel.add(id);
+                cbRender();
+                if (!cb.sel.has(id)) return;
+            } else if (!cb.sel.has(id)) cb.sel = new Set([id]);
+            let ids = cbExpanded(cb.sel);
+            const startItems = JSON.stringify(cb.items);
+            if (e.altKey) {
+                // Alt + drag: drag a copy
+                cbRecord();
+                const copies = cbCopies(cb.items.filter((it) => ids.has(it.id)), 0, 0);
+                cb.items.push(...copies);
+                cb.sel = new Set(copies.map((c) => c.id));
+                ids = new Set(copies.map((c) => c.id));
+            }
+            const orig = new Map();
+            cb.items.forEach((it) => {
+                if (!ids.has(it.id)) return;
+                if (it.type === 'arrow') orig.set(it.id, { from: { ...it.from }, to: { ...it.to } });
+                else orig.set(it.id, { x: it.x, y: it.y });
+            });
+            cbRender();
+            cbAct = { type: 'move', start: p, orig, moved: false, recorded: !!e.altKey, startItems, clickId: id };
+            return;
+        }
+        // empty board (or inside a frame)
+        if (e.pointerType === 'touch') { cbStartPan(e); cbAct.tapFrame = onFrameBody ? itemEl.dataset.id : null; return; }
+        cbAct = { type: 'marquee', start: p, base: e.shiftKey ? new Set(cb.sel) : new Set(), frame: onFrameBody ? itemEl.dataset.id : null, moved: false };
+        if (!e.shiftKey && cb.sel.size) { cb.sel = new Set(); cbRender(); }
+    });
+
+    cbBoard.addEventListener('pointermove', (e) => {
+        if (cbPointers.has(e.pointerId)) cbPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        if (!cbAct) return;
+        if (cbAct.type === 'pinch') {
+            if (cbPointers.size < 2) return;
+            const [a, b] = [...cbPointers.values()];
+            const r = cbBoard.getBoundingClientRect();
+            const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+            const cx = (a.x + b.x) / 2 - r.left, cy = (a.y + b.y) / 2 - r.top;
+            const v0 = cbAct.v0;
+            const s = Math.min(4, Math.max(0.1, v0.s * d / cbAct.d0));
+            const wx = (cbAct.cx - v0.x) / v0.s, wy = (cbAct.cy - v0.y) / v0.s;
+            cb.view = { s, x: cx - wx * s, y: cy - wy * s };
+            cbApplyView();
+            cbRenderArrows();
+            return;
+        }
+        if (cbAct.type === 'pan') {
+            cb.view.x = cbAct.vx + e.clientX - cbAct.sx;
+            cb.view.y = cbAct.vy + e.clientY - cbAct.sy;
+            if (Math.hypot(e.clientX - cbAct.sx, e.clientY - cbAct.sy) > 4) cbAct.moved = true;
+            cbApplyView();
+            return;
+        }
+        const p = cbWorldPt(e);
+        const dx = p.x - (cbAct.start ? cbAct.start.x : p.x), dy = p.y - (cbAct.start ? cbAct.start.y : p.y);
+        const far = Math.hypot(dx, dy) * cb.view.s > 3;
+        if (cbAct.type === 'move') {
+            if (!cbAct.moved && !far) return;
+            if (!cbAct.recorded) { cb.undo.push(cbAct.startItems); cb.redo = []; cbAct.recorded = true; }
+            cbAct.moved = true;
+            cbAct.orig.forEach((o, id) => {
+                const it = cbById(id);
+                if (!it) return;
+                if (it.type === 'arrow') {
+                    if (!o.from.id) it.from = { x: o.from.x + dx, y: o.from.y + dy };
+                    if (!o.to.id) it.to = { x: o.to.x + dx, y: o.to.y + dy };
+                } else { it.x = o.x + dx; it.y = o.y + dy; }
+            });
+            cbRender();
+        } else if (cbAct.type === 'resize') {
+            const it = cbById(cbAct.id);
+            if (!it) return;
+            if (!cbAct.recorded) { cbRecord(); cbAct.recorded = true; }
+            it.w = Math.max(40, cbAct.w + dx);
+            if (it.type === 'image' || e.shiftKey) it.h = Math.max(20, it.w * cbAct.ratio);
+            else if (it.type !== 'text') it.h = Math.max(it.type === 'frame' ? 60 : 40, cbAct.h + dy);
+            cbRender();
+        } else if (cbAct.type === 'newframe') {
+            if (!cbAct.id && !far) return;
+            if (!cbAct.id) { cbRecord(); cbAct.id = cbNewFrame(p.x, p.y, 1, 1).id; }
+            const it = cbById(cbAct.id);
+            it.x = Math.min(cbAct.start.x, p.x); it.y = Math.min(cbAct.start.y, p.y);
+            it.w = Math.max(40, Math.abs(dx)); it.h = Math.max(40, Math.abs(dy));
+            cbRender();
+        } else if (cbAct.type === 'newarrow' || cbAct.type === 'arrowend') {
+            if (cbAct.type === 'newarrow' && !cbAct.id) {
+                if (!far) return;
+                cbRecord();
+                cbAct.id = cbAdd({ type: 'arrow', from: cbAct.from, to: { x: p.x, y: p.y }, color: cbColorPref('arrow') }).id;
+            }
+            if (cbAct.type === 'arrowend' && !cbAct.recorded) { cbRecord(); cbAct.recorded = true; }
+            const a = cbById(cbAct.id);
+            if (!a) return;
+            const which = cbAct.type === 'newarrow' ? 'to' : cbAct.which;
+            const other = which === 'to' ? a.from : a.to;
+            const hit = cbItemAt(e.clientX, e.clientY, other.id);
+            a[which] = hit ? { id: hit.id } : { x: p.x, y: p.y };
+            cbRender();
+        } else if (cbAct.type === 'marquee') {
+            if (!cbAct.moved && !far) return;
+            cbAct.moved = true;
+            const x1 = Math.min(cbAct.start.x, p.x), y1 = Math.min(cbAct.start.y, p.y);
+            const r = { x: x1, y: y1, w: Math.abs(dx), h: Math.abs(dy) };
+            const s = cb.view.s;
+            cbMarquee.hidden = false;
+            Object.assign(cbMarquee.style, { left: `${x1 * s + cb.view.x}px`, top: `${y1 * s + cb.view.y}px`, width: `${r.w * s}px`, height: `${r.h * s}px` });
+            const sel = new Set(cbAct.base);
+            cb.items.forEach((it) => {
+                if (it.type === 'arrow') {
+                    const [a, b] = cbArrowPoints(it);
+                    if (cbInside({ x: a.x, y: a.y, w: 0, h: 0 }, r) && cbInside({ x: b.x, y: b.y, w: 0, h: 0 }, r)) sel.add(it.id);
+                    return;
+                }
+                const ir = cbRect(it);
+                const hit = it.type === 'frame' ? cbInside(ir, r)
+                    : !(ir.x > r.x + r.w || ir.x + ir.w < r.x || ir.y > r.y + r.h || ir.y + ir.h < r.y);
+                if (hit) sel.add(it.id);
+            });
+            cb.sel = sel;
+            cbRender();
+        }
+    });
+
+    function cbPointerEnd(e) {
+        const wasPinch = cbAct && cbAct.type === 'pinch';
+        cbPointers.delete(e.pointerId);
+        if (wasPinch) { if (!cbPointers.size) cbAct = null; return; }
+        if (!cbAct) return;
+        const act = cbAct;
+        cbAct = null;
+        cbBoard.classList.remove('panning');
+        cbMarquee.hidden = true;
+        const p = cbWorldPt(e);
+        let tapped = false;
+        if (act.type === 'move') {
+            if (act.moved) cbSave(); else tapped = true;
+            if (act.recorded && !act.moved) cbSave(); // an Alt-click copy
+        } else if (act.type === 'resize' || act.type === 'arrowend') {
+            if (act.recorded) cbSave();
+        } else if (act.type === 'newframe') {
+            if (!act.id) { cbRecord(); cbNewFrame(p.x - 320, p.y - 210, 640, 420); }
+            cbSetTool('select');
+            cbRender();
+            cbSave();
+        } else if (act.type === 'newarrow') {
+            if (act.id) { cbSetTool('select'); cbSave(); }
+        } else if (act.type === 'marquee') {
+            if (!act.moved) {
+                tapped = true;
+                if (act.frame) { cb.sel = new Set([act.frame]); cbRender(); }
+            }
+        } else if (act.type === 'pan') {
+            if (!act.moved) {
+                tapped = true;
+                if (act.tapFrame) { cb.sel = new Set([act.tapFrame]); cbRender(); }
+                else if (cb.sel.size) { cb.sel = new Set(); cbRender(); }
+            }
+        }
+        // a double click / double tap
+        if (tapped && e.button === 0 && e.type === 'pointerup') {
+            const now = Date.now();
+            if (cbLastTap && now - cbLastTap.t < 400 && Math.hypot(e.clientX - cbLastTap.x, e.clientY - cbLastTap.y) < 12) {
+                cbLastTap = null;
+                cbDouble(e, p);
+            } else cbLastTap = { t: now, x: e.clientX, y: e.clientY };
+        } else cbLastTap = null;
+    }
+    cbBoard.addEventListener('pointerup', cbPointerEnd);
+    cbBoard.addEventListener('pointercancel', cbPointerEnd);
+
+    function cbDouble(e, p) {
+        const target = cbDownTarget && cbDownTarget.isConnected ? cbDownTarget : e.target;
+        const itemEl = target.closest && target.closest('.cb-item');
+        if (itemEl) {
+            const it = cbById(itemEl.dataset.id);
+            if (it && (it.type === 'sticky' || it.type === 'text')) { cbStartEdit(it.id); return; }
+            if (it && it.type === 'frame' && target.closest('.cb-frame-title')) { cbStartEdit(it.id); return; }
+            if (it && it.type === 'image') return;
+        }
+        if (target.closest && target.closest('[data-arrow]')) return;
+        cbNewSticky(p); // double-click on the board: a new sticky note
+    }
+
+    cbBoard.addEventListener('wheel', (e) => {
+        if (!cbActive()) return;
+        e.preventDefault();
+        const l = cbLocal(e);
+        const k = Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : e.ctrlKey ? 0.01 : 0.0015));
+        cbZoomAt(l.x, l.y, k);
+    }, { passive: false });
+    cbBoard.addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); });
+    cbBoard.addEventListener('contextmenu', (e) => { if (cbActive() && !cb.editing) e.preventDefault(); });
+
+    // drop pictures on the board
+    cbBoard.addEventListener('dragover', (e) => {
+        if (Array.from(e.dataTransfer.types || []).includes('Files')) e.preventDefault();
+    });
+    cbBoard.addEventListener('drop', (e) => {
+        const files = [...(e.dataTransfer.files || [])].filter((f) => f.type.startsWith('image/'));
+        if (!files.length) return;
+        e.preventDefault();
+        cbAddImages(files, cbWorldPt(e));
+    });
+
+    /* ---- keyboard, copy and paste ---- */
+    const cbTypingElsewhere = (e) => {
+        const t = e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]');
+        return !!(t && t.offsetParent !== null);
+    };
+    document.addEventListener('keydown', (e) => {
+        if (e.key === ' ' && !e.repeat && cbActive() && !cb.editing && !cbTypingElsewhere(e)) { cbSpace = true; e.preventDefault(); return; }
+        if (!cbActive() || cb.editing || cbTypingElsewhere(e)) return;
+        const k = e.key.toLowerCase();
+        const mod = e.ctrlKey || e.metaKey;
+        if (e.key === 'Delete' || e.key === 'Backspace') { if (cb.sel.size) { e.preventDefault(); cbDelete(); } return; }
+        if (e.key === 'Escape') { cb.sel = new Set(); cbSetTool('select'); cbRender(); return; }
+        if (e.key === 'Enter' && cb.sel.size === 1) { e.preventDefault(); cbStartEdit([...cb.sel][0]); return; }
+        if (mod && !e.altKey && k === 'z') { e.preventDefault(); cbUndoRedo(!e.shiftKey); return; }
+        if (mod && !e.altKey && k === 'y') { e.preventDefault(); cbUndoRedo(false); return; }
+        if (mod && k === 'd') { e.preventDefault(); cbDuplicate(); return; }
+        if (mod && k === 'a') { e.preventDefault(); cb.sel = new Set(cb.items.map((i) => i.id)); cbRender(); return; }
+        if (mod && (e.key === '=' || e.key === '+')) { e.preventDefault(); cbZoomAt(cbBoard.clientWidth / 2, cbBoard.clientHeight / 2, 1.25); return; }
+        if (mod && e.key === '-') { e.preventDefault(); cbZoomAt(cbBoard.clientWidth / 2, cbBoard.clientHeight / 2, 0.8); return; }
+        if (mod || e.altKey) return;
+        const tools = { v: 'select', h: 'hand', n: 'sticky', t: 'text', f: 'frame', a: 'arrow', l: 'arrow' };
+        if (tools[k]) { e.preventDefault(); cbSetTool(tools[k]); }
+    });
+    document.addEventListener('keyup', (e) => { if (e.key === ' ') cbSpace = false; });
+    window.addEventListener('blur', () => { cbSpace = false; });
+
+    function cbCopySelection(e, cut) {
+        if (!cbActive() || cb.editing || cbTypingElsewhere(e) || !cb.sel.size) return;
+        const ids = cbExpanded(cb.sel);
+        cbClipboard = cbClone(cb.items.filter((it) => ids.has(it.id)));
+        e.clipboardData.setData('text/plain', CB_MARK);
+        e.preventDefault();
+        if (cut) cbDelete();
+    }
+    document.addEventListener('copy', (e) => cbCopySelection(e, false));
+    document.addEventListener('cut', (e) => cbCopySelection(e, true));
+    document.addEventListener('paste', (e) => {
+        if (!cbActive() || !e.clipboardData) return;
+        if (Date.now() - cbMiddleAt < 1500) { e.preventDefault(); return; }
+        const files = [...(e.clipboardData.files || [])].filter((f) => f.type.startsWith('image/'));
+        if (cb.editing) {
+            // pictures pasted while typing become pictures on the board; text goes in the note
+            if (files.length) { e.preventDefault(); cbAddImages(files); }
+            return;
+        }
+        if (cbTypingElsewhere(e)) return;
+        e.preventDefault();
+        if (files.length) { cbAddImages(files); return; }
+        const text = e.clipboardData.getData('text/plain');
+        if (text === CB_MARK && cbClipboard) { cbPaste(cbClipboard); return; }
+        const html = e.clipboardData.getData('text/html');
+        const m = html && /<img[^>]+src="(data:image\/[^"]+)"/i.exec(html);
+        if (m) {
+            fetch(m[1].replace(/&quot;/g, '"')).then((r) => r.blob())
+                .then((blob) => cbAddImages([new File([blob], 'pasted', { type: blob.type || 'image/png' })]))
+                .catch(() => toast('Could not paste that picture'));
+            return;
+        }
+        if (text && text.trim()) {
+            const c = cbViewCenter();
+            cbRecord();
+            cbAdd({ type: 'text', x: c.x - 140, y: c.y - 16, w: 280, html: sanitizeHtml(html || escapeHtml(text).replace(/\n/g, '<br>')) });
+            cbRender();
+            cbSave();
+        }
+    });
+    window.addEventListener('resize', () => { if (state.prefs.mode === 'collage') cbRenderArrows(); });
+
 
     /* ---------------- grid mode (fill cells by drawing over them) ---------------- */
 

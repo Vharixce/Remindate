@@ -98,6 +98,7 @@
                     <div class="editor-toolbar">
                         <div class="mode-toggle">
                             <button class="toggle-btn active" id="modeText">Text</button>
+                            <button class="toggle-btn" id="modeCollage">Collage</button>
                             <button class="toggle-btn" id="modeDraw">Draw</button>
                             <button class="toggle-btn" id="modeGrid">Grid</button>
                         </div>
@@ -210,6 +211,36 @@
                         </div>
                     </div>
 
+                    <div class="card draw-toolbar text-toolbar collage-toolbar" id="collageToolbar" style="display:none;">
+                        <div class="draw-tools">
+                            <button class="tool-btn active" type="button" data-cb-tool="select" title="Select and move (V) – drag on the board to select several things">↖</button>
+                            <button class="tool-btn" type="button" data-cb-tool="hand" title="Move the board (H) – or drag with the middle mouse button / hold Space">✋</button>
+                            <button class="tool-btn" type="button" data-cb-tool="sticky" title="Sticky note (N) – or double-click on the board">🗒 Sticky</button>
+                            <button class="tool-btn" type="button" data-cb-tool="text" title="Text (T)">T Text</button>
+                            <button class="tool-btn" type="button" data-cb-tool="frame" title="Frame (F) – click, or drag to choose its size. Things inside move with it">▭ Frame</button>
+                            <button class="tool-btn" type="button" data-cb-tool="arrow" title="Arrow (A) – drag from one thing to another">↗ Arrow</button>
+                            <button class="tool-btn" type="button" id="cbImageBtn" title="Add pictures (you can also paste or drop them on the board)">🖼 Image</button>
+                            <input type="file" id="cbImageFile" accept="image/*" multiple hidden>
+                            <span class="text-colors cb-colors" id="cbColors" title="Colour of the selected sticky notes, frames, arrows or texts"></span>
+                            <button class="tool-btn heading-btn" type="button" id="cbHeading" title="Heading">Heading</button>
+                            <button class="tool-btn" type="button" data-cb-cmd="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+                            <button class="tool-btn" type="button" data-cb-cmd="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+                            <button class="tool-btn" type="button" data-cb-cmd="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+                            <button class="tool-btn" type="button" data-cb-cmd="strikeThrough" title="Strikethrough"><s>S</s></button>
+                            <span class="text-colors" id="cbTextColors" title="Text colour"></span>
+                            <button class="tool-btn" type="button" data-cb-cmd="insertUnorderedList" title="Bullet list">&bull; List</button>
+                            <button class="tool-btn" type="button" data-cb-cmd="insertOrderedList" title="Numbered list">1. List</button>
+                            <button class="tool-btn" type="button" id="cbUndo" title="Undo (Ctrl+Z)" disabled>↶</button>
+                            <button class="tool-btn" type="button" id="cbRedo" title="Redo (Ctrl+Y)" disabled>↷</button>
+                            <button class="tool-btn" type="button" id="cbDup" title="Duplicate (Ctrl+D, or Alt + drag)" disabled>⧉</button>
+                            <button class="tool-btn" type="button" id="cbFront" title="Bring to front" disabled>⤒</button>
+                            <button class="tool-btn" type="button" id="cbBack" title="Send to back" disabled>⤓</button>
+                            <button class="tool-btn" type="button" id="cbDelete" title="Delete (Delete key)" disabled>🗑</button>
+                            <button class="tool-btn cb-zoom" type="button" id="cbZoom" title="Back to 100%">100%</button>
+                            <button class="tool-btn" type="button" id="cbFit" title="Show everything">⛶</button>
+                        </div>
+                    </div>
+
                     <div class="card draw-toolbar" id="gridToolbar" style="display:none;">
                         <div class="draw-tools">
                             <button class="swatch" id="gridColorSwatch" title="Color"></button>
@@ -241,6 +272,15 @@
 
                     <div class="editor-body">
                         <div id="noteContent" class="text-editor rich-editor" contenteditable="true" spellcheck="true" data-placeholder="Write your note here..."></div>
+                        <div class="collage-board" id="collageBoard" style="display:none;">
+                            <div class="cb-world" id="cbWorld">
+                                <div class="cb-layer" id="cbFrames"></div>
+                                <svg class="cb-arrows" id="cbArrows" xmlns="http://www.w3.org/2000/svg"></svg>
+                                <div class="cb-layer" id="cbItems"></div>
+                            </div>
+                            <div class="cb-marquee" id="cbMarquee" hidden></div>
+                            <div class="cb-empty" id="cbEmpty">Double-click to add a sticky note · scroll to zoom · middle mouse button to move</div>
+                        </div>
                         <div class="draw-container zoom-viewport" id="drawContainer" style="display:none;">
                             <canvas id="drawCanvas" width="800" height="600"></canvas>
                             <button class="zoom-reset" type="button" hidden title="Reset zoom">1:1</button>
