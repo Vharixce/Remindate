@@ -1222,7 +1222,8 @@
 
     /* ---------------- private notes ----------------
      * A private note asks for the "Private Note Pass" every time it is opened.
-     * The pass is kept on this device as a salted hash (never as plain text).
+     * The pass is kept as a salted hash (never as plain text), on this device and in
+     * remindate.json, so every synced device uses the same pass.
      * Note: this locks the note in the app; the note itself is not encrypted. */
     let privatePass = readJSON(STORAGE.privatePass, null);
     let unlockedNoteId = null;
@@ -1257,9 +1258,14 @@
     async function setPass(pass) {
         const salt = toHex(crypto.getRandomValues(new Uint8Array(16)));
         const iterations = 150000;
-        privatePass = { salt, iterations, hash: await hashPass(pass, salt, iterations) };
+        privatePass = { salt, iterations, hash: await hashPass(pass, salt, iterations), setAt: new Date().toISOString() };
         writeJSON(STORAGE.privatePass, privatePass);
+        markChanged();
+        scheduleGithubSave(); // the (hashed) pass goes into remindate.json too
     }
+    // a pass from remindate.json / a .json file is only used when it looks right
+    const validPass = (p) => (p && typeof p === 'object' && typeof p.salt === 'string' && typeof p.hash === 'string' &&
+        Number.isFinite(p.iterations) ? { salt: p.salt, iterations: p.iterations, hash: p.hash, ...(p.setAt ? { setAt: p.setAt } : {}) } : null);
 
     // Shows the lock screen for a private note; returns true when the note stays locked
     function showPrivateLock(note) {
@@ -1952,12 +1958,14 @@
         if (n.nodeType === 1 && !n.textContent.trim() && !n.querySelector('img, audio, [data-voice]')) return { before: n };
         return { before: n.nextSibling };
     }
+    // the size you picked last time (S/M/L/Full) is used for new pictures
+    const lastImgSize = () => ([12, 24, 48, 100].includes(Number(state.prefs.imgSize)) ? Number(state.prefs.imgSize) : 24);
     function pictureLine(src) {
         const line = document.createElement('div');
         const img = document.createElement('img');
         img.src = src;
         img.alt = '';
-        img.style.width = '24%'; // new pictures start at size M
+        img.style.width = `${lastImgSize()}%`; // new pictures get the size you used last
         line.appendChild(img);
         return line;
     }
@@ -2111,7 +2119,7 @@
         if (!movingNoteImg && !Array.from(e.dataTransfer.types || []).includes('Files')) return;
         e.preventDefault();
         const aspect = movingNoteImg && movingNoteImg.naturalWidth ? movingNoteImg.naturalHeight / movingNoteImg.naturalWidth : 0.66;
-        const pct = movingNoteImg ? parseFloat(movingNoteImg.style.width) || 24 : 24;
+        const pct = movingNoteImg ? parseFloat(movingNoteImg.style.width) || 24 : lastImgSize();
         showDropOutline(dropTarget(e.clientX, e.clientY), aspect, pct);
     });
     editorEl.addEventListener('dragleave', (e) => {
@@ -2231,6 +2239,8 @@
         const size = e.target.closest('[data-img-size]');
         if (size && selectedImg) {
             selectedImg.style.width = `${size.dataset.imgSize}%`;
+            state.prefs.imgSize = Number(size.dataset.imgSize);
+            savePrefs();
             markTextChanged();
         }
     });
@@ -7138,13 +7148,14 @@
         return JSON.stringify(value === undefined ? null : value);
     }
 
-    const snapshotKey = (snap) => stableStringify({ notes: snap.notes, folders: snap.folders, deleted: snap.deleted });
+    const snapshotKey = (snap) => stableStringify({ notes: snap.notes, folders: snap.folders, deleted: snap.deleted, privatePass: snap.privatePass || null });
 
     function localSnapshot() {
         return JSON.parse(JSON.stringify({
             notes: state.notes,
             folders: state.folders,
             deleted: state.deleted,
+            privatePass: privatePass || null,
             updatedAt: state.updatedAt
         }));
     }
@@ -7156,6 +7167,7 @@
             notes: notes.map((n) => { migrateNote(n); return n; }),
             folders: (Array.isArray(data) ? [] : (data.folders || [])).map((f) => { migrateFolder(f); return f; }),
             deleted: normalizeDeleted(Array.isArray(data) ? null : data.deleted),
+            privatePass: Array.isArray(data) ? null : validPass(data.privatePass),
             updatedAt: Array.isArray(data) ? null : (data.updatedAt || null)
         };
         return snap;
@@ -7201,7 +7213,11 @@
         const notes = mergeList('notes', local.notes, remote.notes)
             .map((n) => (n.folderId && !folderIds.has(n.folderId) ? { ...n, folderId: null } : n));
 
-        return { notes, folders, deleted, updatedAt: laterIso(local.updatedAt, remote.updatedAt) };
+        // the pass that was set (or changed) last wins; with no dates, the one in remindate.json
+        const lp = local.privatePass || null, rp = remote.privatePass || null;
+        const pass = !lp ? rp : !rp ? lp : (timeOf(lp.setAt) > timeOf(rp.setAt) ? lp : rp);
+
+        return { notes, folders, deleted, privatePass: pass, updatedAt: laterIso(local.updatedAt, remote.updatedAt) };
     }
 
     // Put a merged snapshot into the app without counting it as a new local change
@@ -7214,6 +7230,12 @@
         state.folders = snap.folders;
         state.deleted = snap.deleted;
         state.updatedAt = snap.updatedAt;
+        if (snap.privatePass && stableStringify(snap.privatePass) !== stableStringify(privatePass)) {
+            privatePass = snap.privatePass;
+            writeJSON(STORAGE.privatePass, privatePass);
+            if (typeof updatePassPanel === 'function') updatePassPanel();
+            if (isPrivateLocked(noteById(state.currentNoteId))) renderEditor();
+        }
         writeJSON(STORAGE.notes, state.notes);
         writeJSON(STORAGE.folders, state.folders);
         writeJSON(STORAGE.deleted, state.deleted);
@@ -7259,7 +7281,8 @@
             updatedAt: snap.updatedAt || new Date().toISOString(),
             folders: snap.folders,
             notes: snap.notes,
-            deleted: snap.deleted
+            deleted: snap.deleted,
+            ...(snap.privatePass ? { privatePass: snap.privatePass } : {})
         };
         const result = await githubRequest('PUT', {
             message: `Remindate sync ${new Date().toISOString()}`,
@@ -7349,7 +7372,8 @@
                 const payload = {
                     app: 'Remindate', version: 1,
                     updatedAt: snap.updatedAt || new Date().toISOString(),
-                    folders: snap.folders, notes: snap.notes, deleted: snap.deleted
+                    folders: snap.folders, notes: snap.notes, deleted: snap.deleted,
+                    ...(snap.privatePass ? { privatePass: snap.privatePass } : {})
                 };
                 const r = await serverRequest('PUT', payload, rev);
                 serverConfig.remoteUpdatedAt = payload.updatedAt;
@@ -7617,7 +7641,8 @@
             updatedAt: state.updatedAt,
             folders: state.folders,
             notes: state.notes,
-            deleted: state.deleted
+            deleted: state.deleted,
+            ...(privatePass ? { privatePass } : {})
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -7671,6 +7696,8 @@
                 state.notes = merged.notes.map((n) => { migrateNote(n); return n; });
                 state.folders = merged.folders;
             }
+            // no pass on this device yet: take the one from the file
+            if (!privatePass && snap.privatePass) { privatePass = snap.privatePass; writeJSON(STORAGE.privatePass, privatePass); updatePassPanel(); }
             if (!noteById(state.currentNoteId)) state.currentNoteId = sortedNotes(state.notes)[0]?.id || null;
             state.currentFolderId = noteById(state.currentNoteId)?.folderId || null;
             state.prefs.expandedFolders = ['__none', ...state.folders.map((f) => f.id)];
