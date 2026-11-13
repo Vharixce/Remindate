@@ -8331,7 +8331,8 @@ RemminStore.ready.then(() => {
                 for (let k = 1; k < pts.length; k++) {
                     const a = ((pts[k - 1].a + pts[k].a) / 2) * fade;
                     if (a < 0.01) continue;
-                    g.strokeStyle = `rgba(140, 128, 255, ${(a * 0.55).toFixed(3)})`;
+                    // almost the colour of the background: you barely see the line itself
+                    g.strokeStyle = `rgba(255, 255, 255, ${(a * 0.04).toFixed(3)})`;
                     g.beginPath();
                     g.moveTo(pts[k - 1].x, pts[k - 1].y);
                     g.lineTo(pts[k].x, pts[k].y);
@@ -8358,12 +8359,12 @@ RemminStore.ready.then(() => {
             dots.forEach((v, key) => {
                 const [i, j] = key.split(',').map(Number);
                 const { x, y } = nodeXY(i, j);
-                g.fillStyle = `rgba(3, 3, 6, ${Math.min(1, v * 1.1).toFixed(3)})`; // darker than the background
+                g.fillStyle = `rgba(0, 0, 0, ${Math.min(1, v * 1.5).toFixed(3)})`; // darker than the background
                 g.beginPath();
-                g.arc(x, y, 1.7, 0, Math.PI * 2);
+                g.arc(x, y, 2, 0, Math.PI * 2);
                 g.fill();
-                // a faint light rim so the dark dot is visible on the dark background
-                g.strokeStyle = `rgba(140, 128, 255, ${(v * 0.35).toFixed(3)})`;
+                // a faint light rim so the dark dot stands out a little on the dark background
+                g.strokeStyle = `rgba(255, 255, 255, ${(v * 0.12).toFixed(3)})`;
                 g.lineWidth = 0.8;
                 g.stroke();
             });
