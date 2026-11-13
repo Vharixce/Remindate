@@ -8228,6 +8228,158 @@ RemminStore.ready.then(() => {
         if (tab === 'admin') $('broadcastInput').value = broadcastText();
     }
 
+    /* ---------------- moving lines on the site background ----------------
+     * An axonometric grid of dots (every other column half a step lower) that only shows near
+     * thin lines travelling along the grid. A line fades out strongly towards its tail and a
+     * little towards its head. Drawn on one canvas behind everything. */
+    (function backgroundLines() {
+        const canvas = document.createElement('canvas');
+        canvas.className = 'bg-lines';
+        canvas.setAttribute('aria-hidden', 'true');
+        document.body.prepend(canvas);
+        const g = canvas.getContext('2d');
+        const STEP = 24;                       // distance between neighbouring dots
+        const COL = STEP * Math.sqrt(3) / 2;   // distance between columns
+        const TRAIL = 9;                       // a line is this many steps long
+        const REACH = 54;                      // dots show up to this far from a line
+        const SPEED = 46;                      // px per second
+        const reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        let W = 0, H = 0, dpr = 1, lines = [], last = 0, running = false;
+
+        const nodeXY = (i, j) => ({ x: i * COL, y: j * STEP + (i & 1 ? STEP / 2 : 0) });
+        // the six neighbours: 0 up, 1 right-up, 2 right-down, 3 down, 4 left-down, 5 left-up
+        function neighbour(i, j, d) {
+            const odd = i & 1;
+            switch (d) {
+                case 0: return [i, j - 1];
+                case 1: return [i + 1, j + (odd ? 0 : -1)];
+                case 2: return [i + 1, j + (odd ? 1 : 0)];
+                case 3: return [i, j + 1];
+                case 4: return [i - 1, j + (odd ? 1 : 0)];
+                default: return [i - 1, j + (odd ? 0 : -1)];
+            }
+        }
+        function newLine() {
+            const i = Math.floor(Math.random() * (W / COL + 2)) - 1;
+            const j = Math.floor(Math.random() * (H / STEP + 2)) - 1;
+            return { nodes: [[i, j]], dir: Math.floor(Math.random() * 6), t: 0, age: 0, life: 9 + Math.random() * 10 };
+        }
+        function resize() {
+            dpr = Math.min(2, window.devicePixelRatio || 1);
+            W = window.innerWidth; H = window.innerHeight;
+            canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+            g.setTransform(dpr, 0, 0, dpr, 0, 0);
+            const want = Math.max(4, Math.min(22, Math.round((W * H) / 95000)));
+            while (lines.length < want) { const l = newLine(); l.age = Math.random() * l.life * 0.6; lines.push(l); }
+            lines.length = want;
+        }
+        // brightness along a line: u = 0 at the tail .. 1 at the head
+        const shade = (u) => (u < 0.78 ? Math.pow(u / 0.78, 1.6) : 1 - ((u - 0.78) / 0.22) * 0.5);
+
+        function step(l, dt) {
+            l.age += dt;
+            l.t += (SPEED * dt) / STEP;
+            while (l.t >= 1) {
+                l.t -= 1;
+                const [i, j] = l.nodes[l.nodes.length - 1];
+                l.nodes.push(neighbour(i, j, l.dir));
+                if (l.nodes.length > TRAIL + 1) l.nodes.shift();
+                const r = Math.random();
+                if (r < 0.14) l.dir = (l.dir + 1) % 6; else if (r < 0.28) l.dir = (l.dir + 5) % 6;
+            }
+        }
+        // the points of a line from tail to head, with how bright each one is
+        function points(l) {
+            const n = l.nodes;
+            const head = neighbour(n[n.length - 1][0], n[n.length - 1][1], l.dir);
+            const all = [...n, head].map(([i, j]) => nodeXY(i, j));
+            const full = n.length > TRAIL; // the tail moves along too once the line is full length
+            const pts = [];
+            for (let k = 0; k < all.length - 1; k++) {
+                const a = all[k], b = all[k + 1];
+                const from = k === 0 && full ? l.t : 0;
+                const to = k === all.length - 2 ? l.t : 1;
+                for (let s = 0; s <= 4; s++) {
+                    const f = from + (to - from) * (s / 4);
+                    if (s === 0 && k > 0) continue;
+                    pts.push({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f });
+                }
+            }
+            const len = pts.length - 1 || 1;
+            pts.forEach((p, k) => { p.a = shade(k / len); });
+            return pts;
+        }
+
+        function frame(now) {
+            if (!running) return;
+            const dt = Math.min(0.05, (now - (last || now)) / 1000) * (reduced ? 0.3 : 1);
+            last = now;
+            g.clearRect(0, 0, W, H);
+            const dots = new Map();
+            lines.forEach((l, idx) => {
+                step(l, dt);
+                const fade = Math.min(1, l.age / 1.2, (l.life - l.age) / 1.2);
+                const pts = points(l);
+                const headPt = pts[pts.length - 1];
+                if (fade <= 0 || headPt.x < -200 || headPt.y < -200 || headPt.x > W + 200 || headPt.y > H + 200) {
+                    lines[idx] = newLine();
+                    return;
+                }
+                // the line: short pieces, each with its own brightness
+                g.lineWidth = 1.4;
+                g.lineCap = 'round';
+                for (let k = 1; k < pts.length; k++) {
+                    const a = ((pts[k - 1].a + pts[k].a) / 2) * fade;
+                    if (a < 0.01) continue;
+                    g.strokeStyle = `rgba(140, 128, 255, ${(a * 0.55).toFixed(3)})`;
+                    g.beginPath();
+                    g.moveTo(pts[k - 1].x, pts[k - 1].y);
+                    g.lineTo(pts[k].x, pts[k].y);
+                    g.stroke();
+                }
+                // the dots near the line
+                pts.forEach((p, k) => {
+                    if (k % 2 || p.a * fade < 0.03) return;
+                    const i0 = Math.floor((p.x - REACH) / COL), i1 = Math.ceil((p.x + REACH) / COL);
+                    for (let i = i0; i <= i1; i++) {
+                        const off = i & 1 ? STEP / 2 : 0;
+                        const j0 = Math.floor((p.y - REACH - off) / STEP), j1 = Math.ceil((p.y + REACH - off) / STEP);
+                        for (let j = j0; j <= j1; j++) {
+                            const x = i * COL, y = j * STEP + off;
+                            const d = Math.hypot(x - p.x, y - p.y);
+                            if (d >= REACH) continue;
+                            const v = p.a * fade * Math.pow(1 - d / REACH, 1.4);
+                            const key = `${i},${j}`;
+                            if (!(dots.get(key) >= v)) dots.set(key, v);
+                        }
+                    }
+                });
+            });
+            dots.forEach((v, key) => {
+                const [i, j] = key.split(',').map(Number);
+                const { x, y } = nodeXY(i, j);
+                g.fillStyle = `rgba(3, 3, 6, ${Math.min(1, v * 1.1).toFixed(3)})`; // darker than the background
+                g.beginPath();
+                g.arc(x, y, 1.7, 0, Math.PI * 2);
+                g.fill();
+                // a faint light rim so the dark dot is visible on the dark background
+                g.strokeStyle = `rgba(140, 128, 255, ${(v * 0.35).toFixed(3)})`;
+                g.lineWidth = 0.8;
+                g.stroke();
+            });
+            requestAnimationFrame(frame);
+        }
+        function start() {
+            if (running || document.hidden) return;
+            running = true; last = 0;
+            requestAnimationFrame(frame);
+        }
+        resize();
+        window.addEventListener('resize', resize);
+        document.addEventListener('visibilitychange', () => { if (document.hidden) running = false; else start(); });
+        start();
+    })();
+
     /* ---------------- broadcast text in the top bar ---------------- */
     const DEFAULT_BROADCAST = 'Broadcast: Remmin version 1.1';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);

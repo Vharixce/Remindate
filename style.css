@@ -21,18 +21,11 @@ html, body {
     height: 100%;
 }
 
-/* dots in an axonometric (isometric) grid, turned 90°: every other column shifted half a step,
-   columns √3/2 of a step apart, so each dot has six neighbours at the same distance */
-:root { --iso-step: 24px; --iso-row: calc(var(--iso-step) * 1.7320508); --site-dot: #050508; }
-/* the site background: dots darker than the background (the Collage board has light dots) */
-body, #viewNote .editor-toolbar, .private-lock {
-    background-color: var(--bg);
-    background-image: radial-gradient(circle, var(--site-dot) 1.4px, transparent 1.9px),
-                      radial-gradient(circle, var(--site-dot) 1.4px, transparent 1.9px);
-    background-size: var(--iso-row) var(--iso-step);
-    background-position: 0 0, calc(var(--iso-row) / 2) calc(var(--iso-step) / 2);
-    background-attachment: fixed; /* the sticky bar shows the same dots, so it doesn't look like a stripe */
-}
+/* the site background: moving lines with dots around them (drawn on a canvas, see app.js) */
+body { background: var(--bg); }
+.bg-lines { position: fixed; inset: 0; width: 100%; height: 100%; z-index: -1; pointer-events: none; }
+.private-lock { background: var(--bg); }
+#viewNote .editor-toolbar { background: rgba(18, 18, 26, .82); -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px); }
 
 body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
