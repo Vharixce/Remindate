@@ -203,12 +203,12 @@ RemminStore.ready.then(() => {
         ['#14b8a6', 'Turquoise'], ['#22d3ee', 'Cyan'],
         ['#3b82f6', 'Blue'], ['#1e3a8a', 'Dark blue'], ['#6366f1', 'Blue-purple'],
         ['#c4b5fd', 'Light purple'], ['#8b5cf6', 'Purple'], ['#d946ef', 'Magenta'], ['#f472b6', 'Pink'],
-        ['#000000', 'Black'], ['#4b5563', 'Dark grey'], ['#d1d5db', 'Light grey'], ['#ffffff', 'White']
+        ['#000000', 'Black'], ['#404040', 'Dark grey'], ['#bfbfbf', 'Light grey'], ['#ffffff', 'White'] // dark grey = 75% black, light grey = 25% black
     ];
     const OLD_BRIGHT_RED = '#ef4444'; // the earlier, paler "Bright red"
     const NEW_BRIGHT_RED = '#e11d1d';
     const PALETTE = PALETTE_NAMED.map(([c]) => c);
-    const DEFAULT_PEN_COLOR = '#d1d5db';   // light grey
+    const DEFAULT_PEN_COLOR = '#bfbfbf';   // light grey
     const DEFAULT_CANVAS_BG = '#000000';   // black
 
     const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June',
@@ -6332,8 +6332,8 @@ RemminStore.ready.then(() => {
     const CB_COLORS = [
         ['#fff9b1', 'Light yellow'], ['#f5d128', 'Yellow'], ['#ff9d48', 'Orange'], ['#f24726', 'Red'],
         ['#ea94bb', 'Pink'], ['#be88c7', 'Violet'], ['#a6ccf5', 'Light blue'], ['#2d9bf0', 'Blue'],
-        ['#67c6c0', 'Teal'], ['#8fd14f', 'Green'], ['#ffffff', 'White'], ['#e6e6e6', 'Light grey'],
-        ['#808080', 'Grey'], ['#1a1a1a', 'Black']
+        ['#67c6c0', 'Teal'], ['#8fd14f', 'Green'], ['#ffffff', 'White'], ['#bfbfbf', 'Light grey'],
+        ['#808080', 'Grey'], ['#404040', 'Dark grey'], ['#1a1a1a', 'Black']
     ];
     const CB_DEFAULT = { sticky: '#fff9b1', frame: '#ffffff', arrow: '#cbd5e1' };
     const cb = { items: [], view: { x: 40, y: 40, s: 1 }, tool: 'select', sel: new Set(), editing: null,
@@ -8384,10 +8384,12 @@ RemminStore.ready.then(() => {
     })();
 
     /* ---------------- broadcast text in the top bar ---------------- */
-    const DEFAULT_BROADCAST = 'Broadcast: Remmin version 1.1';
+    // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
+    const PATCH_NOTE = 'new light & dark greys, patch notes here';
+    const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {
-        const text = broadcastText().trim();
+        const text = broadcastText().replace(/XXX/g, PATCH_NOTE).trim();
         const box = $('broadcast'), track = $('broadcastTrack');
         box.hidden = !text;
         if (!text) { track.innerHTML = ''; return; }
