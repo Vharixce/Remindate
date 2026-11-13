@@ -8383,9 +8383,57 @@ RemminStore.ready.then(() => {
         start();
     })();
 
+    /* ---------------- a soft trail behind the mouse ----------------
+     * Dark purple, faint, gone within about a third of a second. Mouse only (not touch),
+     * drawn on a canvas that never catches clicks. */
+    (function mouseTrail() {
+        if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        const canvas = document.createElement('canvas');
+        canvas.className = 'mouse-trail';
+        canvas.setAttribute('aria-hidden', 'true');
+        document.body.appendChild(canvas);
+        const g = canvas.getContext('2d');
+        const LIFE = 320; // ms a point stays visible
+        let pts = [], W = 0, H = 0, dpr = 1, running = false;
+        function resize() {
+            dpr = Math.min(2, window.devicePixelRatio || 1);
+            W = window.innerWidth; H = window.innerHeight;
+            canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+            g.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        function frame() {
+            const now = performance.now();
+            pts = pts.filter((p) => now - p.t < LIFE);
+            g.clearRect(0, 0, W, H);
+            g.lineCap = 'round';
+            for (let i = 1; i < pts.length; i++) {
+                const a = pts[i - 1], b = pts[i];
+                const k = 1 - (now - b.t) / LIFE;        // 1 = just now, 0 = gone
+                if (k <= 0) continue;
+                g.strokeStyle = `rgba(91, 52, 170, ${(k * k * 0.32).toFixed(3)})`;
+                g.lineWidth = 0.8 + k * 3.2;             // thinner as it fades
+                g.beginPath();
+                g.moveTo(a.x, a.y);
+                g.lineTo(b.x, b.y);
+                g.stroke();
+            }
+            if (pts.length) requestAnimationFrame(frame);
+            else running = false;
+        }
+        document.addEventListener('pointermove', (e) => {
+            if (e.pointerType !== 'mouse') return;
+            pts.push({ x: e.clientX, y: e.clientY, t: performance.now() });
+            if (pts.length > 80) pts.shift();
+            if (!running) { running = true; requestAnimationFrame(frame); }
+        }, { passive: true });
+        document.addEventListener('mouseleave', () => { pts = []; });
+        resize();
+        window.addEventListener('resize', resize);
+    })();
+
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'new light & dark greys, patch notes here';
+    const PATCH_NOTE = 'a subtle purple trail now follows your mouse';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {
