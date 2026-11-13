@@ -23,11 +23,12 @@ html, body {
 
 /* dots in an axonometric (isometric) grid, turned 90°: every other column shifted half a step,
    columns √3/2 of a step apart, so each dot has six neighbours at the same distance */
-:root { --iso-step: 24px; --iso-row: calc(var(--iso-step) * 1.7320508); --site-dot: rgba(255, 255, 255, .075); }
+:root { --iso-step: 24px; --iso-row: calc(var(--iso-step) * 1.7320508); --site-dot: #050508; }
+/* the site background: dots darker than the background (the Collage board has light dots) */
 body, #viewNote .editor-toolbar, .private-lock {
     background-color: var(--bg);
-    background-image: radial-gradient(circle, var(--site-dot) 1px, transparent 1.4px),
-                      radial-gradient(circle, var(--site-dot) 1px, transparent 1.4px);
+    background-image: radial-gradient(circle, var(--site-dot) 1.4px, transparent 1.9px),
+                      radial-gradient(circle, var(--site-dot) 1.4px, transparent 1.9px);
     background-size: var(--iso-row) var(--iso-step);
     background-position: 0 0, calc(var(--iso-row) / 2) calc(var(--iso-step) / 2);
     background-attachment: fixed; /* the sticky bar shows the same dots, so it doesn't look like a stripe */
