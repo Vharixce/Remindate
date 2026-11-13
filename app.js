@@ -1,8 +1,139 @@
 /* Remindate Web
  * Notes, folders, calendar and drawing. All data is stored locally in the browser
- * (local storage), so no server or account is required.
+ * (IndexedDB, with room for much more than the ~5 MB of local storage), so no server
+ * or account is required. GitHub / a server can keep a synced copy.
  */
-(() => {
+
+/* ---------------- storage: IndexedDB with a copy in memory ----------------
+ * The app reads and writes through this small layer (synchronously, from memory);
+ * every change is written to IndexedDB right after. Data that was still in local
+ * storage (older versions) is moved over once. If IndexedDB can't be used (some
+ * private windows), local storage is used as before. */
+const RemindateStore = (() => {
+    const DB_NAME = 'remindate';
+    const STORE = 'kv';
+    const MIGRATED = '__migratedFromLocalStorage';
+    const cache = new Map();
+    const pending = new Map(); // key -> string (write) or null (delete)
+    let db = null;
+    let useLocal = false;
+    let flushQueued = false;
+    let onError = () => {};
+
+    const localKeys = () => {
+        const keys = [];
+        try {
+            for (let i = 0; i < localStorage.length; i++) {
+                const k = localStorage.key(i);
+                if (k && k.startsWith('remindate.')) keys.push(k);
+            }
+        } catch (_) { /* no local storage */ }
+        return keys;
+    };
+    const loadFromLocal = () => {
+        useLocal = true;
+        localKeys().forEach((k) => cache.set(k, localStorage.getItem(k)));
+    };
+    const reqDone = (req) => new Promise((resolve, reject) => {
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+    });
+    const txDone = (tx) => new Promise((resolve, reject) => {
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => reject(tx.error);
+        tx.onabort = () => reject(tx.error || new Error('aborted'));
+    });
+
+    async function open() {
+        if (!('indexedDB' in window)) throw new Error('no IndexedDB');
+        const opened = new Promise((resolve, reject) => {
+            const req = indexedDB.open(DB_NAME, 1);
+            req.onupgradeneeded = () => { req.result.createObjectStore(STORE); };
+            req.onsuccess = () => resolve(req.result);
+            req.onerror = () => reject(req.error);
+            req.onblocked = () => reject(new Error('blocked'));
+        });
+        const timeout = new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000));
+        db = await Promise.race([opened, timeout]);
+        db.onversionchange = () => { db.close(); db = null; };
+
+        const tx = db.transaction(STORE, 'readonly');
+        const store = tx.objectStore(STORE);
+        const [keys, values] = await Promise.all([reqDone(store.getAllKeys()), reqDone(store.getAll())]);
+        keys.forEach((k, i) => cache.set(String(k), values[i]));
+
+        if (!cache.has(MIGRATED)) {
+            // move what older versions kept in local storage into IndexedDB (once)
+            const keysToMove = localKeys();
+            const wtx = db.transaction(STORE, 'readwrite');
+            const ws = wtx.objectStore(STORE);
+            keysToMove.forEach((k) => {
+                if (cache.has(k)) return;
+                const v = localStorage.getItem(k);
+                if (v === null) return;
+                cache.set(k, v);
+                ws.put(v, k);
+            });
+            ws.put('1', MIGRATED);
+            cache.set(MIGRATED, '1');
+            await txDone(wtx);
+            // it is safely in IndexedDB now: free the small local storage
+            keysToMove.forEach((k) => { try { localStorage.removeItem(k); } catch (_) { /* ignore */ } });
+        }
+        // ask the browser not to clear this data when the disk gets full
+        try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (_) { /* ignore */ }
+    }
+
+    function flush() {
+        flushQueued = false;
+        if (!pending.size) return;
+        const batch = new Map(pending);
+        pending.clear();
+        if (useLocal || !db) {
+            batch.forEach((v, k) => {
+                try { if (v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (err) { onError(err); }
+            });
+            return;
+        }
+        try {
+            const tx = db.transaction(STORE, 'readwrite');
+            const store = tx.objectStore(STORE);
+            batch.forEach((v, k) => { if (v === null) store.delete(k); else store.put(v, k); });
+            txDone(tx).catch((err) => {
+                // put the failed changes back so a later save tries again
+                batch.forEach((v, k) => { if (!pending.has(k)) pending.set(k, v); });
+                onError(err);
+            });
+        } catch (err) {
+            batch.forEach((v, k) => { if (!pending.has(k)) pending.set(k, v); });
+            onError(err);
+        }
+    }
+    const queue = () => {
+        if (flushQueued) return;
+        flushQueued = true;
+        queueMicrotask(flush);
+    };
+
+    const ready = open().catch((err) => {
+        console.warn('IndexedDB not available, using local storage:', err);
+        db = null;
+        cache.clear();
+        loadFromLocal();
+    });
+
+    return {
+        ready,
+        get: (key) => (cache.has(key) ? cache.get(key) : null),
+        set(key, value) { cache.set(key, value); pending.set(key, value); queue(); },
+        remove(key) { cache.delete(key); pending.set(key, null); queue(); },
+        flush,
+        onError(fn) { onError = fn; },
+        get usingIndexedDB() { return !!db && !useLocal; }
+    };
+})();
+
+RemindateStore.ready.then(() => {
     'use strict';
 
     const STORAGE = {
@@ -82,7 +213,7 @@
 
     function readJSON(key, fallback) {
         try {
-            const raw = localStorage.getItem(key);
+            const raw = RemindateStore.get(key);
             return raw ? JSON.parse(raw) : fallback;
         } catch (err) {
             console.warn('Could not read data:', key, err);
@@ -92,12 +223,19 @@
 
     function writeJSON(key, value) {
         try {
-            localStorage.setItem(key, JSON.stringify(value));
+            RemindateStore.set(key, JSON.stringify(value));
         } catch (err) {
-            console.error('Save failed:', err);
-            toast('Save failed: your browser storage is full or unavailable.');
+            reportSaveError(err);
         }
     }
+    let lastSaveError = 0;
+    function reportSaveError(err) {
+        console.error('Save failed:', err);
+        if (Date.now() - lastSaveError < 10000) return; // don't repeat the message on every keystroke
+        lastSaveError = Date.now();
+        toast('Save failed: your browser storage is full or unavailable.');
+    }
+    RemindateStore.onError(reportSaveError);
 
     function load() {
         state.notes = readJSON(STORAGE.notes, []);
@@ -3328,7 +3466,7 @@
     /* ---- email notification (sent by the GitHub Action, see EMAIL-SETUP.md) ---- */
     const EMAIL_KEY = 'remindate.emailAddress.v1';
     const EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']{2,}$/;
-    const defaultEmail = () => localStorage.getItem(EMAIL_KEY) || '';
+    const defaultEmail = () => RemindateStore.get(EMAIL_KEY) || '';
 
     // Who is the email popup for? The open note, or the "Schedule note" window.
     let emailTarget = null;
@@ -3389,7 +3527,7 @@
             $('emailAddress').focus();
             return;
         }
-        if ($('emailRemember').checked) localStorage.setItem(EMAIL_KEY, address);
+        if ($('emailRemember').checked) RemindateStore.set(EMAIL_KEY, address);
         emailTarget.save(address);
         closeEmailModal();
         toast(`Email notification on → ${address}`);
@@ -8521,7 +8659,7 @@
     });
     $('serverClearBtn').addEventListener('click', () => {
         serverConfig = {};
-        localStorage.removeItem(STORAGE.server);
+        RemindateStore.remove(STORAGE.server);
         $('srvUrl').value = '';
         $('srvToken').value = '';
         $('srvAutoSync').checked = false;
@@ -8564,7 +8702,7 @@
     });
     $('githubClearBtn').addEventListener('click', () => {
         githubConfig = {};
-        localStorage.removeItem(STORAGE.github);
+        RemindateStore.remove(STORAGE.github);
         $('ghOwner').value = '';
         $('ghRepo').value = '';
         $('ghPath').value = 'remindate.json';
@@ -8866,7 +9004,7 @@
     function playAlarmSound() {
         stopAlarmSound();
         alarmStopTimer = setTimeout(stopAlarmSound, ALARM_MAX_SOUND_MS);
-        const saved = localStorage.getItem('remindate.alarmSound.v1');
+        const saved = RemindateStore.get('remindate.alarmSound.v1');
         if (saved) {
             alarmAudio = new Audio(saved);
             alarmAudio.loop = true;
@@ -8899,7 +9037,7 @@
         const reader = new FileReader();
         reader.onload = () => {
             try {
-                localStorage.setItem('remindate.alarmSound.v1', reader.result);
+                RemindateStore.set('remindate.alarmSound.v1', reader.result);
                 $('alarmSoundStatus').textContent = `Using custom sound: ${file.name}`;
                 toast('Custom alarm sound saved');
             } catch (_) { toast('This sound file is too large to store in browser storage'); }
@@ -8907,7 +9045,7 @@
         reader.readAsDataURL(file);
     });
     $('standardAlarmSoundBtn').addEventListener('click', () => {
-        localStorage.removeItem('remindate.alarmSound.v1');
+        RemindateStore.remove('remindate.alarmSound.v1');
         $('alarmSoundFile').value = '';
         $('alarmSoundStatus').textContent = 'Using standard sound';
         toast('Standard alarm sound selected');
@@ -8923,7 +9061,7 @@
         setTimeout(() => { $('testAlarmSoundBtn').textContent = 'Test sound'; }, ALARM_MAX_SOUND_MS);
     });
     $('openAlarmSoundSettings').addEventListener('click', () => {
-        const customSound = localStorage.getItem('remindate.alarmSound.v1');
+        const customSound = RemindateStore.get('remindate.alarmSound.v1');
         $('alarmSoundStatus').textContent = customSound ? 'Using a custom sound' : 'Using standard sound';
         $('alarmSoundModal').classList.add('active');
     });
@@ -9268,6 +9406,9 @@
     setInterval(checkAlarms, 5000);
 
     window.addEventListener('beforeunload', flushEditor);
+    // phones often close a page without beforeunload: save when it goes to the background
+    document.addEventListener('visibilitychange', () => { if (document.hidden) { flushEditor(); RemindateStore.flush(); } });
+    window.addEventListener('pagehide', () => { flushEditor(); RemindateStore.flush(); });
     window.addEventListener('resize', () => {
         fitCanvas();
         if (state.prefs.activeTab === 'calendar') renderCalendar();
@@ -9279,4 +9420,4 @@
         setTimeout(() => syncAll(autoProviders(), { silent: true }), 400);
     }
     window.Remindate = { exportData, importData };
-})();
+});
