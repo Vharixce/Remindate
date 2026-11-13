@@ -8384,7 +8384,7 @@ RemminStore.ready.then(() => {
     })();
 
     /* ---------------- a soft trail behind the mouse ----------------
-     * Dark purple, faint, gone within about a third of a second. Mouse only (not touch),
+     * In the background colour, gone within about a third of a second. Mouse only (not touch),
      * drawn on a canvas that never catches clicks. */
     (function mouseTrail() {
         if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
@@ -8410,8 +8410,8 @@ RemminStore.ready.then(() => {
                 const a = pts[i - 1], b = pts[i];
                 const k = 1 - (now - b.t) / LIFE;        // 1 = just now, 0 = gone
                 if (k <= 0) continue;
-                g.strokeStyle = `rgba(91, 52, 170, ${(k * k * 0.32).toFixed(3)})`;
-                g.lineWidth = 0.8 + k * 3.2;             // thinner as it fades
+                g.strokeStyle = `rgba(18, 18, 26, ${(k * k * 0.7).toFixed(3)})`; // the background colour (--bg)
+                g.lineWidth = 2.4 + k * 9.6;             // thinner as it fades
                 g.beginPath();
                 g.moveTo(a.x, a.y);
                 g.lineTo(b.x, b.y);
@@ -8433,7 +8433,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'a subtle purple trail now follows your mouse';
+    const PATCH_NOTE = 'bigger mouse trail in the background colour';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {
