@@ -6398,8 +6398,10 @@ RemminStore.ready.then(() => {
         const { x, y, s } = cb.view;
         cbWorld.style.transform = `translate(${x}px, ${y}px) scale(${s})`;
         cbWorld.style.setProperty('--cbs', s);
-        cbBoard.style.backgroundSize = `${24 * s}px ${24 * s}px`;
-        cbBoard.style.backgroundPosition = `${x}px ${y}px`;
+        // axonometric dots: rows √3/2 apart, every other row shifted half a step (two layers)
+        const step = 24 * s, row = step * Math.sqrt(3);
+        cbBoard.style.backgroundSize = `${step}px ${row}px`;
+        cbBoard.style.backgroundPosition = `${x}px ${y}px, ${x + step / 2}px ${y + row / 2}px`;
         $('cbZoom').textContent = `${Math.round(s * 100)}%`;
         if (cb.noteId) cbViews.set(cb.noteId, { ...cb.view });
     }

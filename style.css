@@ -21,9 +21,20 @@ html, body {
     height: 100%;
 }
 
+/* dots in an axonometric (isometric) grid: every other row shifted half a step,
+   rows √3/2 of a step apart, so each dot has six neighbours at the same distance */
+:root { --iso-step: 24px; --iso-row: calc(var(--iso-step) * 1.7320508); --site-dot: rgba(255, 255, 255, .075); }
+body, #viewNote .editor-toolbar, .private-lock {
+    background-color: var(--bg);
+    background-image: radial-gradient(circle, var(--site-dot) 1px, transparent 1.4px),
+                      radial-gradient(circle, var(--site-dot) 1px, transparent 1.4px);
+    background-size: var(--iso-step) var(--iso-row);
+    background-position: 0 0, calc(var(--iso-step) / 2) calc(var(--iso-row) / 2);
+    background-attachment: fixed; /* the sticky bar shows the same dots, so it doesn't look like a stripe */
+}
+
 body {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    background: var(--bg);
     color: var(--text);
     overflow: hidden;
 }
@@ -1730,7 +1741,7 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .private-btn.active { border-color: var(--primary); color: var(--text); background: rgba(124,111,240,.18); }
 #viewNote { position: relative; }
 .private-lock {
-    position: absolute; inset: 0; z-index: 40; background: var(--bg);
+    position: absolute; inset: 0; z-index: 40;
     display: flex; align-items: flex-start; justify-content: center; padding: 12vh 16px 16px;
 }
 .private-lock[hidden] { display: none; }
@@ -1902,7 +1913,7 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 /* the Text / Draw / Grid bar moves along at the top; the toolbars stay right below it */
 #viewNote .editor-toolbar {
     position: sticky; top: -16px; z-index: 32;
-    background: var(--bg); padding: 6px 0; margin: -6px 0;
+    padding: 6px 0; margin: -6px 0;
 }
 #textToolbar, #drawToolbar, #gridToolbar, #collageToolbar { top: calc(var(--modebar-h, 48px) - 16px); }
 @media (max-width: 760px) {
@@ -1947,7 +1958,8 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
     position: relative; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none;
     height: max(420px, calc(100dvh - 230px));
     background-color: var(--card);
-    background-image: radial-gradient(circle, rgba(255, 255, 255, .13) 1px, transparent 1.4px);
+    background-image: radial-gradient(circle, rgba(255, 255, 255, .13) 1px, transparent 1.4px),
+                      radial-gradient(circle, rgba(255, 255, 255, .13) 1px, transparent 1.4px);
     border: 1px solid var(--border); border-radius: 8px; cursor: default;
 }
 .collage-board[data-tool="hand"] { cursor: grab; }
