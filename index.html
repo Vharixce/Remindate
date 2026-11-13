@@ -43,6 +43,20 @@
                 <button class="footer-btn" id="importBtn" title="Load notes from a .json file">⬆ Upload .json</button>
                 <input type="file" id="importFile" accept=".json,application/json,text/plain" hidden>
             </div>
+            <div class="storage-meters">
+                <div class="storage-meter" hidden id="meterGithub">
+                    <div class="storage-meter-top"><span class="storage-meter-name">GitHub (server)</span><span class="storage-meter-num"></span></div>
+                    <div class="storage-meter-bar"><div class="storage-meter-fill"></div></div>
+                </div>
+                <div class="storage-meter" hidden id="meterServer">
+                    <div class="storage-meter-top"><span class="storage-meter-name">Server</span><span class="storage-meter-num"></span></div>
+                    <div class="storage-meter-bar"><div class="storage-meter-fill"></div></div>
+                </div>
+                <div class="storage-meter" id="meterLocal">
+                    <div class="storage-meter-top"><span class="storage-meter-name">Offline (this device)</span><span class="storage-meter-num"></span></div>
+                    <div class="storage-meter-bar"><div class="storage-meter-fill"></div></div>
+                </div>
+            </div>
             <div class="sidebar-footer">
                 <button class="footer-btn" id="trashBtn" title="Recently deleted notes">🗑 Trash</button>
             </div>

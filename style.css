@@ -1996,3 +1996,14 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .collage-toolbar .tool-btn:disabled { opacity: .4; }
 .cb-zoom { min-width: 52px; }
 .cb-textbox.cb-editing { min-width: 160px; }
+
+/* storage meters above Trash */
+.storage-meters { padding: 6px 10px 2px; display: flex; flex-direction: column; gap: 6px; flex-shrink: 0; }
+.storage-meter[hidden] { display: none; }
+.storage-meter-top { display: flex; justify-content: space-between; gap: 6px; font-size: 10px; color: var(--text-dim); margin-bottom: 3px; }
+.storage-meter-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.storage-meter-num { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.storage-meter-bar { height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .08); overflow: hidden; }
+.storage-meter-fill { height: 100%; width: 0; border-radius: 2px; background: var(--primary); transition: width .3s; }
+.storage-meter.warn .storage-meter-fill { background: #f59e0b; }
+.storage-meter.full .storage-meter-fill { background: #ef4444; }

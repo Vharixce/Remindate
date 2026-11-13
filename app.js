@@ -19,6 +19,7 @@ const RemindateStore = (() => {
     let useLocal = false;
     let flushQueued = false;
     let onError = () => {};
+    let onChange = () => {};
 
     const localKeys = () => {
         const keys = [];
@@ -125,8 +126,11 @@ const RemindateStore = (() => {
     return {
         ready,
         get: (key) => (cache.has(key) ? cache.get(key) : null),
-        set(key, value) { cache.set(key, value); pending.set(key, value); queue(); },
-        remove(key) { cache.delete(key); pending.set(key, null); queue(); },
+        set(key, value) { cache.set(key, value); pending.set(key, value); queue(); onChange(); },
+        remove(key) { cache.delete(key); pending.set(key, null); queue(); onChange(); },
+        // roughly how many bytes Remindate keeps on this device
+        bytes() { let n = 0; cache.forEach((v, k) => { n += k.length + (v ? v.length : 0); }); return n; },
+        onChange(fn) { onChange = fn; },
         flush,
         onError(fn) { onError = fn; },
         get usingIndexedDB() { return !!db && !useLocal; }
@@ -8394,6 +8398,7 @@ RemindateStore.ready.then(() => {
             legacy = true;
         }
         if (!meta) return null;
+        if (!legacy && Number.isFinite(meta.size)) { githubConfig.fileSize = meta.size; updateStorageMeters(); }
         let text;
         if (meta.content && meta.encoding === 'base64') text = decodeGithubFile(meta.content);
         else text = await githubRequest('GET', null, url, 'application/vnd.github.raw+json'); // files > 1 MB
@@ -8413,9 +8418,11 @@ RemindateStore.ready.then(() => {
             ...(snap.privatePass ? { privatePass: snap.privatePass } : {}),
             ...(snap.settings ? { settings: snap.settings } : {})
         };
+        const fileText = JSON.stringify(payload, null, 2);
+        githubConfig.fileSize = new TextEncoder().encode(fileText).length;
         const result = await githubRequest('PUT', {
             message: `Remindate sync ${new Date().toISOString()}`,
-            content: encodeGithubFile(JSON.stringify(payload, null, 2)),
+            content: encodeGithubFile(fileText),
             ...(sha ? { sha } : {})
         });
         if (!result || !result.content) {
@@ -8465,6 +8472,9 @@ RemindateStore.ready.then(() => {
             throw error;
         }
         const text = await response.text();
+        if (method === 'GET' && text) serverConfig.fileSize = new TextEncoder().encode(text).length;
+        else if (body) serverConfig.fileSize = new TextEncoder().encode(JSON.stringify(body)).length;
+        updateStorageMeters();
         return { etag: response.headers.get('ETag'), text };
     }
 
@@ -9378,6 +9388,58 @@ RemindateStore.ready.then(() => {
         if (e.key === 'Escape') closeModals();
     });
 
+    /* ---------------- storage meters (above Trash) ---------------- */
+    const GITHUB_FILE_LIMIT = 100 * 1024 * 1024; // GitHub refuses files over 100 MB
+    let localQuota = null;
+    // 6,18 MB (used: always two decimals) · 100 MB / 120 GB (totals: as short as possible)
+    const sizeText = (bytes, fixed, unit) => {
+        const div = unit === 'GB' ? 1024 ** 3 : 1024 ** 2;
+        return (bytes / div).toLocaleString(undefined, fixed ? { minimumFractionDigits: 2, maximumFractionDigits: 2 } : { maximumFractionDigits: 1 });
+    };
+    function setMeter(id, show, used, total, title) {
+        const el = $(id);
+        el.hidden = !show;
+        if (!show) return;
+        const bar = el.querySelector('.storage-meter-fill');
+        const num = el.querySelector('.storage-meter-num');
+        el.title = title;
+        if (used == null) { num.textContent = 'not synced yet'; bar.style.width = '0'; return; }
+        const frac = total ? Math.min(1, used / total) : 0;
+        if (!total) num.textContent = `${sizeText(used, true, 'MB')} MB used`;
+        else if (total >= 1024 ** 3) {
+            // a big total in GB; what is used stays in MB while it is small
+            num.textContent = used >= 1024 ** 3
+                ? `${sizeText(used, true, 'GB')}/${sizeText(total, false, 'GB')} GB used`
+                : `${sizeText(used, true, 'MB')} MB/${sizeText(total, false, 'GB')} GB used`;
+        } else num.textContent = `${sizeText(used, true, 'MB')}/${sizeText(total, false, 'MB')} MB used`;
+        bar.style.width = total ? `${Math.max(frac * 100, used > 0 ? 1.5 : 0)}%` : '0';
+        el.classList.toggle('warn', frac >= 0.75 && frac < 0.9);
+        el.classList.toggle('full', frac >= 0.9);
+        el.title = title;
+    }
+    let meterTimer = null;
+    function updateStorageMeters() {
+        clearTimeout(meterTimer);
+        meterTimer = setTimeout(() => {
+            setMeter('meterGithub', githubConfigured(), Number.isFinite(githubConfig.fileSize) ? githubConfig.fileSize : null,
+                GITHUB_FILE_LIMIT, 'Size of remindate.json on GitHub (GitHub allows files up to 100 MB)');
+            setMeter('meterServer', serverConfigured(), Number.isFinite(serverConfig.fileSize) ? serverConfig.fileSize : null,
+                null, 'Size of your notes on your server');
+            const quota = RemindateStore.usingIndexedDB ? localQuota : 5 * 1024 * 1024;
+            setMeter('meterLocal', true, RemindateStore.bytes(), quota,
+                RemindateStore.usingIndexedDB
+                    ? 'Remindate data saved offline on this device (IndexedDB), out of the space your browser allows'
+                    : 'Remindate data in local storage on this device (about 5 MB is allowed)');
+        }, 300);
+    }
+    async function refreshQuota() {
+        try {
+            if (navigator.storage && navigator.storage.estimate) localQuota = (await navigator.storage.estimate()).quota || null;
+        } catch (_) { localQuota = null; }
+        updateStorageMeters();
+    }
+    RemindateStore.onChange(updateStorageMeters);
+
     /* ---------------- start ---------------- */
 
     load();
@@ -9416,6 +9478,8 @@ RemindateStore.ready.then(() => {
 
     syncReady = true;
     updateGithubStatus();
+    refreshQuota();
+    setInterval(refreshQuota, 5 * 60 * 1000);
     if (autoProviders().length) {
         setTimeout(() => syncAll(autoProviders(), { silent: true }), 400);
     }
