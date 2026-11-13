@@ -439,10 +439,11 @@ RemminStore.ready.then(() => {
     }
     function syncedSettings() {
         const p = state.prefs;
-        if (!Array.isArray(p.holidays) && !Array.isArray(p.clocks)) return null;
+        if (!Array.isArray(p.holidays) && !Array.isArray(p.clocks) && typeof p.broadcast !== 'string') return null;
         return {
             holidays: Array.isArray(p.holidays) ? [...p.holidays] : null,
             clocks: Array.isArray(p.clocks) ? [...p.clocks] : null,
+            ...(typeof p.broadcast === 'string' ? { broadcast: p.broadcast } : {}),
             at: p.settingsAt || null
         };
     }
@@ -450,7 +451,8 @@ RemminStore.ready.then(() => {
         if (!v || typeof v !== 'object') return null;
         const list = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string').slice(0, 100) : null);
         const out = { holidays: list(v.holidays), clocks: list(v.clocks), at: typeof v.at === 'string' ? v.at : null };
-        return out.holidays || out.clocks ? out : null;
+        if (typeof v.broadcast === 'string') out.broadcast = v.broadcast.slice(0, 300);
+        return out.holidays || out.clocks || 'broadcast' in out ? out : null;
     }
     const saveAlarms = () => writeJSON(STORAGE.alarms, state.alarms);
 
@@ -701,10 +703,11 @@ RemminStore.ready.then(() => {
     function renderTree() {
         ensureNoteOrder();
         treeEl.innerHTML = '';
-        const unfiled = sortedNotes(state.notes.filter((n) => !n.folderId));
+        // notes set to "Show ONLY in Calendar" are not listed here
+        const unfiled = sortedNotes(state.notes.filter((n) => !n.folderId && !n.calendarOnly));
 
         const folderHtml = (folder) => {
-            const notes = sortedNotes(state.notes.filter((n) => n.folderId === folder.id));
+            const notes = sortedNotes(state.notes.filter((n) => n.folderId === folder.id && !n.calendarOnly));
             const subs = childFolders(folder.id);
             const expanded = state.prefs.expandedFolders.includes(folder.id);
             const inner = subs.map(folderHtml).join('') + notes.map(noteItemHtml).join('');
@@ -1385,6 +1388,7 @@ RemminStore.ready.then(() => {
 
         if (empty) {
             updatePrivateBtn(null);
+            updateCalendarOnlyBtn(null);
             $('noteTitle').value = '';
             editorEl.innerHTML = '';
             $('noteFolder').innerHTML = folderOptions('');
@@ -1397,6 +1401,7 @@ RemminStore.ready.then(() => {
 
         $('noteTitle').value = note.title;
         updatePrivateBtn(note);
+        updateCalendarOnlyBtn(note);
         stopVoicePlayback();
         editorEl.innerHTML = sanitizeHtml(note.html);   // (also turns web addresses into links)
         resetTextHistory();
@@ -1519,6 +1524,30 @@ RemminStore.ready.then(() => {
     $('privateLockInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); unlockCurrent(); } });
     $('privateLockNoPass').addEventListener('click', () => openSettings('pass'));
 
+    function updateCalendarOnlyBtn(note) {
+        const btn = $('calendarOnlyBtn');
+        btn.disabled = !note;
+        const on = !!(note && note.calendarOnly);
+        btn.classList.toggle('active', on);
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.title = on ? 'Shown ONLY in Calendar (hidden in Explorer). Click to show it in the Explorer again.'
+            : 'Show ONLY in Calendar (hidden in Explorer)';
+    }
+    $('calendarOnlyBtn').addEventListener('click', () => {
+        const note = noteById(state.currentNoteId);
+        if (!note || isPrivateLocked(note)) return;
+        flushEditor();
+        note.calendarOnly = !note.calendarOnly;
+        if (!note.calendarOnly) delete note.calendarOnly;
+        touch(note);
+        updateCalendarOnlyBtn(note);
+        renderTree();
+        if (note.calendarOnly) {
+            toast(note.scheduledAt ? 'Hidden in Explorer: open this note from the Calendar'
+                : 'Hidden in Explorer. Give it a date, or you can only find it in the Calendar if it has one');
+        } else toast('This note is shown in the Explorer again');
+    });
+
     function updatePrivateBtn(note) {
         const btn = $('privateBtn');
         btn.disabled = !note;
@@ -1540,6 +1569,7 @@ RemminStore.ready.then(() => {
         if (note.private) unlockedNoteId = note.id; // stays open until you open it again
         touch(note);
         updatePrivateBtn(note);
+        updateCalendarOnlyBtn(note);
         renderTree();
         toast(note.private ? 'Private: this note now asks for your pass when opened' : 'This note is no longer private');
     });
@@ -8120,7 +8150,38 @@ RemminStore.ready.then(() => {
         });
         document.querySelectorAll('[data-settings-panel]').forEach((p) => { p.hidden = p.dataset.settingsPanel !== tab; });
         if (tab === 'pass') updatePassPanel();
+        if (tab === 'admin') $('broadcastInput').value = broadcastText();
     }
+
+    /* ---------------- broadcast text in the top bar ---------------- */
+    const DEFAULT_BROADCAST = 'Broadcast: Remmin version 1.1';
+    const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
+    function renderBroadcast() {
+        const text = broadcastText().trim();
+        const box = $('broadcast'), track = $('broadcastTrack');
+        box.hidden = !text;
+        if (!text) { track.innerHTML = ''; return; }
+        // the text repeated: two equal halves, so moving one half to the left loops without a jump
+        const one = document.createElement('span');
+        one.textContent = text;
+        track.innerHTML = '';
+        track.appendChild(one);
+        const copies = Math.max(1, Math.ceil((box.clientWidth || 200) / Math.max(1, one.offsetWidth)));
+        for (let i = 1; i < copies; i++) track.appendChild(one.cloneNode(true));
+        const half = [...track.children].map((n) => n.cloneNode(true));
+        half.forEach((n) => track.appendChild(n));
+        const halfWidth = track.scrollWidth / 2 || 200;
+        track.style.setProperty('--broadcast-time', `${Math.max(6, halfWidth / 40)}s`); // about 40 px per second
+    }
+    $('broadcastSave').addEventListener('click', () => {
+        state.prefs.broadcast = $('broadcastInput').value.trim();
+        settingsChanged();
+        renderBroadcast();
+        toast(state.prefs.broadcast ? 'Broadcast text saved' : 'Broadcast text hidden');
+    });
+    $('broadcastInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); $('broadcastSave').click(); } });
+    let broadcastResize = null;
+    window.addEventListener('resize', () => { clearTimeout(broadcastResize); broadcastResize = setTimeout(renderBroadcast, 200); });
     document.querySelectorAll('.settings-tab').forEach((b) => b.addEventListener('click', () => showSettingsTab(b.dataset.tab)));
     $('settingsClose').addEventListener('click', closeModals);
     $('settingsBackdrop').addEventListener('click', closeModals);
@@ -8382,6 +8443,7 @@ RemminStore.ready.then(() => {
     function applySettings(set) {
         if (set.holidays) state.prefs.holidays = [...set.holidays];
         if (set.clocks) state.prefs.clocks = [...set.clocks];
+        if (typeof set.broadcast === 'string') { state.prefs.broadcast = set.broadcast; renderBroadcast(); }
         state.prefs.settingsAt = set.at || state.prefs.settingsAt || null;
         savePrefs();
         syncHolidayCheckboxes();
@@ -9515,6 +9577,8 @@ RemminStore.ready.then(() => {
         if (state.prefs.activeTab === 'calendar') renderCalendar();
     });
 
+    renderBroadcast();
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(renderBroadcast);
     syncReady = true;
     updateGithubStatus();
     refreshQuota();

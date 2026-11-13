@@ -2007,3 +2007,27 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .storage-meter-fill { height: 100%; width: 0; border-radius: 2px; background: var(--primary); transition: width .3s; }
 .storage-meter.warn .storage-meter-fill { background: #f59e0b; }
 .storage-meter.full .storage-meter-fill { background: #ef4444; }
+
+/* 📆 show only in Calendar */
+.calendar-only-btn { padding-left: 9px; padding-right: 9px; }
+.calendar-only-btn.active { border-color: var(--primary); background: rgba(124,111,240,.18); }
+@media (max-width: 760px) {
+    .editor-actions .calendar-only-btn { flex: 0 0 auto; }
+    .editor-actions .folder-select { flex: 1 1 calc(100% - 56px); }
+}
+
+/* broadcast text in the top bar (between Calendar and Settings) */
+.broadcast-slot { flex: 1; min-width: 0; display: flex; justify-content: center; padding: 0 8px; }
+.broadcast {
+    width: 30%; min-width: 120px; overflow: hidden; white-space: nowrap; font-size: 12px; color: var(--text-dim);
+    border: 1px solid var(--border); border-radius: 6px; padding: 4px 0;
+    -webkit-mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+            mask-image: linear-gradient(90deg, transparent, #000 8%, #000 92%, transparent);
+}
+.broadcast[hidden] { display: none; }
+.broadcast-track { display: inline-flex; will-change: transform; animation: broadcast-scroll var(--broadcast-time, 20s) linear infinite; }
+.broadcast-track span { padding-right: 48px; }
+.broadcast:hover .broadcast-track { animation-play-state: paused; }
+@keyframes broadcast-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+@media (prefers-reduced-motion: reduce) { .broadcast-track { animation-duration: calc(var(--broadcast-time, 20s) * 3); } }
+@media (max-width: 760px) { .broadcast { min-width: 70px; font-size: 11px; } }

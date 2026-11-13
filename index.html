@@ -38,11 +38,6 @@
                 </div>
             </div>
 
-            <div class="sidebar-footer">
-                <button class="footer-btn" id="exportBtn" title="Download all your notes as a .json file">⬇ Save .json</button>
-                <button class="footer-btn" id="importBtn" title="Load notes from a .json file">⬆ Upload .json</button>
-                <input type="file" id="importFile" accept=".json,application/json,text/plain" hidden>
-            </div>
             <div class="storage-meters">
                 <div class="storage-meter" hidden id="meterGithub">
                     <div class="storage-meter-top"><span class="storage-meter-name">GitHub (server)</span><span class="storage-meter-num"></span></div>
@@ -56,6 +51,11 @@
                     <div class="storage-meter-top"><span class="storage-meter-name">Offline (this device)</span><span class="storage-meter-num"></span></div>
                     <div class="storage-meter-bar"><div class="storage-meter-fill"></div></div>
                 </div>
+            </div>
+            <div class="sidebar-footer">
+                <button class="footer-btn" id="exportBtn" title="Download all your notes as a .json file">⬇ Save .json</button>
+                <button class="footer-btn" id="importBtn" title="Load notes from a .json file">⬆ Upload .json</button>
+                <input type="file" id="importFile" accept=".json,application/json,text/plain" hidden>
             </div>
             <div class="sidebar-footer">
                 <button class="footer-btn" id="trashBtn" title="Recently deleted notes">🗑 Trash</button>
@@ -80,6 +80,11 @@
                     <button class="tab active" id="tabNote">Note</button>
                     <button class="tab" id="tabCalendar">Calendar</button>
                 </div>
+                <div class="broadcast-slot">
+                    <div class="broadcast" id="broadcast" aria-live="off" hidden>
+                        <div class="broadcast-track" id="broadcastTrack"></div>
+                    </div>
+                </div>
                 <button class="icon-btn" id="toggleSidebarMain" title="Settings">&#9776;</button>
             </div>
 
@@ -103,6 +108,7 @@
                         <input type="text" id="noteTitle" class="title-input" placeholder="Title" autocomplete="off">
                         <div class="editor-actions">
                             <select id="noteFolder" class="folder-select" title="Folder for this note"></select>
+                            <button class="btn calendar-only-btn" id="calendarOnlyBtn" type="button" aria-pressed="false" title="Show ONLY in Calendar (hidden in Explorer)" aria-label="Show ONLY in Calendar (hidden in Explorer)">📆</button>
                             <button class="btn private-btn" id="privateBtn" type="button" aria-pressed="false">🔓 Make Private</button>
                             <button class="btn" id="saveNoteBtn">Save</button>
                             <button class="btn btn-danger" id="deleteNoteBtn">Delete</button>
@@ -620,6 +626,16 @@
             <div class="settings-tabs" role="tablist">
                 <button class="settings-tab active" data-tab="holidays" role="tab" type="button">Add Holiday Calendar</button>
                 <button class="settings-tab" data-tab="pass" role="tab" type="button">Private Note Pass</button>
+                <button class="settings-tab" data-tab="admin" role="tab" type="button">Admin Panel</button>
+            </div>
+            <div class="settings-section" data-settings-panel="admin" hidden>
+                <div class="settings-title">Admin Panel</div>
+                <div class="settings-sub">The broadcast text scrolls along the top of the site, between Calendar and Settings. Leave it empty to hide it. It is synced to your other devices.</div>
+                <div class="plan-row">
+                    <label for="broadcastInput">Broadcast text</label>
+                    <input type="text" id="broadcastInput" maxlength="300" autocomplete="off" placeholder="Broadcast: Remmin version 1.1">
+                </div>
+                <div class="modal-actions"><button class="btn btn-primary" id="broadcastSave" type="button">Save</button></div>
             </div>
             <div class="settings-section" data-settings-panel="pass" hidden>
                 <div class="settings-title">Private Note Pass</div>
