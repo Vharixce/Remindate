@@ -2037,3 +2037,5 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 @keyframes broadcast-scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
 @media (prefers-reduced-motion: reduce) { .broadcast-track { animation-duration: calc(var(--broadcast-time, 20s) * 3); } }
 @media (max-width: 760px) { .broadcast { min-width: 70px; font-size: 11px; } }
+
+.private-btn { padding-left: 9px; padding-right: 9px; }

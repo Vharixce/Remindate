@@ -1605,8 +1605,10 @@ RemminStore.ready.then(() => {
         const on = !!(note && note.private);
         btn.classList.toggle('active', on);
         btn.setAttribute('aria-pressed', on ? 'true' : 'false');
-        btn.textContent = on ? '🔒 Private' : '🔓 Make Private';
-        btn.title = on ? 'This note asks for your Private Note Pass. Click to make it normal again.' : 'Ask for a pass every time this note is opened';
+        btn.textContent = on ? '🔒' : '🔓';
+        btn.title = on ? 'Private: this note asks for your Private Note Pass. Click to make it normal again.'
+            : 'Make Private: ask for a pass every time this note is opened';
+        btn.setAttribute('aria-label', on ? 'Private note' : 'Make Private');
     }
     $('privateBtn').addEventListener('click', () => {
         const note = noteById(state.currentNoteId);
@@ -6399,7 +6401,7 @@ RemminStore.ready.then(() => {
         cbWorld.style.transform = `translate(${x}px, ${y}px) scale(${s})`;
         cbWorld.style.setProperty('--cbs', s);
         // axonometric dots (turned 90°): columns √3/2 apart, every other column shifted half a step (two layers)
-        const step = 24 * s, col = step * Math.sqrt(3);
+        const step = 42 * s, col = step * Math.sqrt(3); // dots 42 px apart (175% of 24)
         cbBoard.style.backgroundSize = `${col}px ${step}px`;
         cbBoard.style.backgroundPosition = `${x}px ${y}px, ${x + col / 2}px ${y + step / 2}px`;
         $('cbZoom').textContent = `${Math.round(s * 100)}%`;

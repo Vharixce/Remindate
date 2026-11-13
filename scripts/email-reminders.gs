@@ -1,5 +1,5 @@
 /**
- * Remmin – email reminders (Google Apps Script)
+ * remmin – email reminders (Google Apps Script)
  *
  * Every minute this script reads remmin.json from your private GitHub data repo,
  * finds notes with "Send Email Notification" on whose time (or repeat) has come,
@@ -7,7 +7,7 @@
  *
  * Setup (once):
  *  1. Project Settings → Script properties → add  GITHUB_TOKEN = <your GitHub token>
- *     (the same fine-grained token Remmin uses for GitHub Sync).
+ *     (the same fine-grained token remmin uses for GitHub Sync).
  *  2. Choose the function "setup" at the top and press Run, then allow the permissions.
  *  3. Optional: run "sendTestEmail" to get a test email.
  */
@@ -42,7 +42,7 @@ function sendTestEmail() {
   var to = withEmail.length ? withEmail[0].emailTo : Session.getActiveUser().getEmail();
   MailApp.sendEmail({
     to: to,
-    subject: '✅ Remmin email test',
+    subject: '✅ remmin email test',
     name: 'Remmin',
     body: 'Email reminders work! Notes found: ' + notes.length + ', with email on: ' + withEmail.length + '.',
     htmlBody: '<div style="font-family:Arial,sans-serif;font-size:15px">✅ <b>Remmin email reminders work!</b><br>' +
@@ -91,8 +91,8 @@ function checkReminders() {
 function loadNotes_() {
   var token = PropertiesService.getScriptProperties().getProperty('GITHUB_TOKEN');
   if (!token) throw new Error('Add the script property GITHUB_TOKEN first (Project Settings → Script properties).');
-  // remmin.json is the data file; remindate.json and notes.json are its old names (used until the app has switched over)
-  var paths = [CONFIG.dataPath, 'remmin.json', 'remindate.json', 'notes.json'].filter(function (p, i, a) { return a.indexOf(p) === i; });
+  // remmin.json is the data file; notes.json is its old name (used until the app has switched over)
+  var paths = [CONFIG.dataPath, 'remmin.json', 'notes.json'].filter(function (p, i, a) { return a.indexOf(p) === i; });
   var res, code;
   for (var i = 0; i < paths.length; i++) {
     var url = 'https://api.github.com/repos/' + CONFIG.dataRepo + '/contents/' +
@@ -108,7 +108,7 @@ function loadNotes_() {
     code = res.getResponseCode();
     if (code !== 404) break;
   }
-  if (code === 404) throw new Error('remmin.json not found in ' + CONFIG.dataRepo + ' (is GitHub Sync on in Remmin?), or the token has no access to that repo.');
+  if (code === 404) throw new Error('remmin.json not found in ' + CONFIG.dataRepo + ' (is GitHub Sync on in remmin?), or the token has no access to that repo.');
   if (code === 401 || code === 403) throw new Error('GitHub refused the token (' + code + '). Check GITHUB_TOKEN and that it can read ' + CONFIG.dataRepo + '.');
   if (code !== 200) throw new Error('GitHub error ' + code);
   var text = res.getContentText('UTF-8');
@@ -196,21 +196,21 @@ function buildMail_(note, occ) {
     if (/data-voice=/i.test(note.html || '')) extras.push('voice notes');
     if ((note.strokes || []).length) extras.push('a drawing');
   }
-  var extraLine = note.private ? '🔒 This is a private note – open Remmin and enter your pass to read it.'
-    : extras.length ? 'This note also contains ' + extras.join(', ') + ' – open Remmin to see them.' : '';
+  var extraLine = note.private ? '🔒 This is a private note – open remmin and enter your pass to read it.'
+    : extras.length ? 'This note also contains ' + extras.join(', ') + ' – open remmin to see them.' : '';
   var time = pad_(occ.getHours()) + ':' + pad_(occ.getMinutes());
   var when = WEEKDAYS[occ.getDay()] + ' ' + occ.getDate() + ' ' + MONTHS[occ.getMonth()] + ' ' + occ.getFullYear() + ' at ' + time;
   var repeating = repeatModeOf_(note) !== 'none';
 
   var body = '⏰ ' + title + '\n' + when + (repeating ? ' (repeating)' : '') + '\n\n' +
-    (text ? text + '\n\n' : '') + (extraLine ? extraLine + '\n\n' : '') + 'Open Remmin: ' + CONFIG.appUrl;
+    (text ? text + '\n\n' : '') + (extraLine ? extraLine + '\n\n' : '') + 'Open remmin: ' + CONFIG.appUrl;
   var html = '<div style="font-family:Arial,Helvetica,sans-serif;max-width:560px;margin:auto;padding:20px;color:#1f2937">' +
-    '<div style="font-size:13px;color:#6b7280;margin-bottom:6px">Remmin reminder</div>' +
+    '<div style="font-size:13px;color:#6b7280;margin-bottom:6px">remmin reminder</div>' +
     '<h2 style="margin:0 0 6px;font-size:20px">⏰ ' + escapeHtml_(title) + '</h2>' +
     '<div style="font-size:14px;color:#4b5563;margin-bottom:16px">' + escapeHtml_(when) + (repeating ? ' · repeating' : '') + '</div>' +
     (text ? '<div style="white-space:pre-wrap;font-size:15px;line-height:1.55;padding:14px 16px;background:#f3f4f6;border-radius:10px">' + escapeHtml_(text) + '</div>' : '') +
     (extraLine ? '<p style="font-size:13px;color:#6b7280">' + escapeHtml_(extraLine) + '</p>' : '') +
-    '<p style="margin-top:18px"><a href="' + CONFIG.appUrl + '" style="background:#7c6ff0;color:#fff;padding:9px 16px;border-radius:8px;text-decoration:none;font-size:14px">Open Remmin</a></p>' +
+    '<p style="margin-top:18px"><a href="' + CONFIG.appUrl + '" style="background:#7c6ff0;color:#fff;padding:9px 16px;border-radius:8px;text-decoration:none;font-size:14px">Open remmin</a></p>' +
     '</div>';
-  return { to: note.emailTo, subject: '⏰ ' + title + ' – ' + time, name: 'Remmin', body: body, htmlBody: html };
+  return { to: note.emailTo, subject: '⏰ ' + title + ' – ' + time, name: 'remmin', body: body, htmlBody: html };
 }
