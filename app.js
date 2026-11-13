@@ -186,6 +186,7 @@ RemminStore.ready.then(() => {
         alarms: 'remmin.alarms.v1',
         deleted: 'remmin.deleted.v1',
         trash: 'remmin.trash.v1',
+        trashGone: 'remmin.trashGone.v1',
         updatedAt: 'remmin.updatedAt.v1',
         github: 'remmin.github.v1',
         server: 'remmin.server.v1'
@@ -293,6 +294,8 @@ RemminStore.ready.then(() => {
         state.updatedAt = readJSON(STORAGE.updatedAt, null);
         state.trash = readJSON(STORAGE.trash, []);
         if (!Array.isArray(state.trash)) state.trash = [];
+        state.trashGone = readJSON(STORAGE.trashGone, {});
+        if (!state.trashGone || typeof state.trashGone !== 'object') state.trashGone = {};
 
         state.notes.forEach(migrateNote);
         state.folders.forEach(migrateFolder);
@@ -437,13 +440,22 @@ RemminStore.ready.then(() => {
         markChanged();
         scheduleGithubSave();
     }
+    const ALARM_SOUND_KEY = 'remmin.alarmSound.v1';
+    const EMAIL_ADDRESS_KEY = 'remmin.emailAddress.v1';
     function syncedSettings() {
         const p = state.prefs;
-        if (!Array.isArray(p.holidays) && !Array.isArray(p.clocks) && typeof p.broadcast !== 'string') return null;
+        const sound = RemminStore.get(ALARM_SOUND_KEY) || '';
+        const email = RemminStore.get(EMAIL_ADDRESS_KEY) || '';
+        if (!p.settingsAt && !Array.isArray(p.holidays) && !Array.isArray(p.clocks) && typeof p.broadcast !== 'string' &&
+            !p.imgSize && !p.collageColors && !sound && !email) return null;
         return {
             holidays: Array.isArray(p.holidays) ? [...p.holidays] : null,
             clocks: Array.isArray(p.clocks) ? [...p.clocks] : null,
             ...(typeof p.broadcast === 'string' ? { broadcast: p.broadcast } : {}),
+            ...(p.imgSize ? { imgSize: p.imgSize } : {}),
+            ...(p.collageColors ? { collageColors: { ...p.collageColors } } : {}),
+            email,
+            alarmSound: sound, // '' = the standard sound
             at: p.settingsAt || null
         };
     }
@@ -452,7 +464,14 @@ RemminStore.ready.then(() => {
         const list = (a) => (Array.isArray(a) ? a.filter((x) => typeof x === 'string').slice(0, 100) : null);
         const out = { holidays: list(v.holidays), clocks: list(v.clocks), at: typeof v.at === 'string' ? v.at : null };
         if (typeof v.broadcast === 'string') out.broadcast = v.broadcast.slice(0, 300);
-        return out.holidays || out.clocks || 'broadcast' in out ? out : null;
+        if ([12, 24, 48, 100].includes(Number(v.imgSize))) out.imgSize = Number(v.imgSize);
+        if (v.collageColors && typeof v.collageColors === 'object') {
+            out.collageColors = {};
+            ['sticky', 'frame', 'arrow'].forEach((k) => { if (/^#[0-9a-f]{6}$/i.test(v.collageColors[k] || '')) out.collageColors[k] = v.collageColors[k]; });
+        }
+        if (typeof v.email === 'string') out.email = v.email.slice(0, 200);
+        if (typeof v.alarmSound === 'string' && (v.alarmSound === '' || /^data:audio\//.test(v.alarmSound))) out.alarmSound = v.alarmSound;
+        return out.holidays || out.clocks || out.at || 'broadcast' in out ? out : null;
     }
     const saveAlarms = () => writeJSON(STORAGE.alarms, state.alarms);
 
@@ -1241,17 +1260,46 @@ RemminStore.ready.then(() => {
 
     const TRASH_DAYS = 30;
 
-    function saveTrash() {
+    function saveTrash(changed = false) {
         const cutoff = Date.now() - TRASH_DAYS * 86400000;
         state.trash = state.trash.filter((t) => (Date.parse(t.deletedAt) || 0) > cutoff).slice(0, 100);
         writeJSON(STORAGE.trash, state.trash);
+        writeJSON(STORAGE.trashGone, state.trashGone);
         updateTrashButton();
+        if (changed) { markChanged(); scheduleGithubSave(); } // the trash is synced too
+    }
+    // a note left the trash (restored or deleted forever): other devices should drop it as well
+    function trashGone(id) { state.trashGone[id] = new Date().toISOString(); }
+    // one trash from two lists: newest delete per note; leaves out what was restored or deleted forever
+    function mergeTrash(a, b, gone, liveIds) {
+        const byId = new Map();
+        [...(a || []), ...(b || [])].forEach((t) => {
+            if (!t || !t.note || !t.note.id) return;
+            const have = byId.get(t.note.id);
+            if (!have || (Date.parse(t.deletedAt) || 0) > (Date.parse(have.deletedAt) || 0)) byId.set(t.note.id, t);
+        });
+        const cutoff = Date.now() - TRASH_DAYS * 86400000;
+        return [...byId.values()]
+            .filter((t) => !liveIds.has(t.note.id))
+            .filter((t) => !(gone[t.note.id] && (Date.parse(gone[t.note.id]) || 0) >= (Date.parse(t.deletedAt) || 0)))
+            .filter((t) => (Date.parse(t.deletedAt) || 0) > cutoff)
+            .sort((x, y) => (Date.parse(y.deletedAt) || 0) - (Date.parse(x.deletedAt) || 0))
+            .slice(0, 100);
+    }
+    function mergeGone(a, b) {
+        const out = {};
+        const cutoff = Date.now() - 60 * 86400000;
+        [a || {}, b || {}].forEach((g) => Object.entries(g).forEach(([id, at]) => {
+            if ((Date.parse(at) || 0) < cutoff) return;
+            if (!out[id] || (Date.parse(at) || 0) > (Date.parse(out[id]) || 0)) out[id] = at;
+        }));
+        return out;
     }
 
     function addToTrash(note) {
         state.trash = state.trash.filter((t) => t.note.id !== note.id);
         state.trash.unshift({ note: JSON.parse(JSON.stringify(note)), deletedAt: new Date().toISOString() });
-        saveTrash();
+        saveTrash(true);
     }
 
     function updateTrashButton() {
@@ -1270,7 +1318,8 @@ RemminStore.ready.then(() => {
         state.notes = state.notes.filter((n) => n.id !== id);
         state.notes.push(note);
         state.trash = state.trash.filter((t) => t.note.id !== id);
-        saveTrash();
+        trashGone(id);
+        saveTrash(true);
         resetAlarmRuntime(note);
         saveNotes();
         renderTree();
@@ -1316,7 +1365,8 @@ RemminStore.ready.then(() => {
             const ok = await askConfirm('Delete forever', 'This note will be gone for good. Continue?', 'Delete');
             if (!ok) return;
             state.trash = state.trash.filter((t) => t.note.id !== forever.dataset.noteId);
-            saveTrash();
+            trashGone(forever.dataset.noteId);
+            saveTrash(true);
             renderTrash();
             openModal('trashModal');
         }
@@ -1325,8 +1375,9 @@ RemminStore.ready.then(() => {
         if (!state.trash.length) return;
         const ok = await askConfirm('Empty trash', `Permanently delete ${state.trash.length} note(s)?`, 'Delete');
         if (!ok) { openModal('trashModal'); return; }
+        state.trash.forEach((t) => trashGone(t.note.id));
         state.trash = [];
-        saveTrash();
+        saveTrash(true);
         renderTrash();
         openModal('trashModal');
     });
@@ -2492,7 +2543,7 @@ RemminStore.ready.then(() => {
         if (size && selectedImg) {
             selectedImg.style.width = `${size.dataset.imgSize}%`;
             state.prefs.imgSize = Number(size.dataset.imgSize);
-            savePrefs();
+            settingsChanged();
             markTextChanged();
         }
     });
@@ -3599,7 +3650,7 @@ RemminStore.ready.then(() => {
             $('emailAddress').focus();
             return;
         }
-        if ($('emailRemember').checked) RemminStore.set(EMAIL_KEY, address);
+        if ($('emailRemember').checked && address !== defaultEmail()) { RemminStore.set(EMAIL_KEY, address); settingsChanged(); }
         emailTarget.save(address);
         closeEmailModal();
         toast(`Email notification on → ${address}`);
@@ -6024,11 +6075,26 @@ RemminStore.ready.then(() => {
         addDrawImages(files, pointerPos(e));
     });
 
+    // the right mouse button (and the eraser end of a pen) always erases, whatever tool is chosen
+    const isEraseButton = (e) => (e.pointerType === 'mouse' && e.button === 2) || (e.pointerType === 'pen' && e.button === 5);
+    let rightErase = false;
+    const drawToolNow = () => (rightErase ? 'eraser' : state.draw.tool);
+
     function startStroke(e) {
         if (state.prefs.mode !== 'draw' || drawZoom.isPinching()) return;
         e.preventDefault();
         const note = noteById(state.currentNoteId);
         if (!note) return;
+        if (isEraseButton(e)) {
+            if (state.draw.drawing || drawSelDrag || pickDrag || marquee) return;
+            rightErase = true;
+            try { canvas.setPointerCapture?.(e.pointerId); } catch (err) { /* ignore */ }
+            state.draw.drawing = true;
+            eraseSaved = false;
+            eraseAt(pointerPos(e));
+            return;
+        }
+        if (e.button > 0) return;
 
         // A selected picture: drag it to move, drag the corner to resize, click elsewhere when done
         if (drawSel) {
@@ -6085,7 +6151,7 @@ RemminStore.ready.then(() => {
 
     function moveStroke(e) {
         if (drawSelDrag) { dragSelection(e); return; }
-        if (state.draw.tool === 'select') { movePick(e); return; }
+        if (drawToolNow() === 'select') { movePick(e); return; }
         if (drawSel && !state.draw.drawing) {
             const hit = selectionHit(pointerPos(e, true));
             canvas.style.cursor = hit === 'resize' ? 'nwse-resize' : hit === 'move' ? 'move' : '';
@@ -6093,7 +6159,7 @@ RemminStore.ready.then(() => {
         if (!state.draw.drawing) return;
         e.preventDefault();
         const pos = pointerPos(e);
-        if (state.draw.tool === 'eraser') {
+        if (drawToolNow() === 'eraser') {
             eraseAt(pos);
             return;
         }
@@ -6114,6 +6180,7 @@ RemminStore.ready.then(() => {
     }
 
     function endStroke() {
+        if (rightErase) { rightErase = false; state.draw.drawing = false; flushEditor(); return; }
         if (drawSelDrag) { drawSelDrag = null; flushEditor(); return; }
         if (pickDrag || marquee) { endPick(); return; }
         if (!state.draw.drawing) return;
@@ -6140,6 +6207,7 @@ RemminStore.ready.then(() => {
     }
 
     canvas.addEventListener('pointerdown', startStroke);
+    canvas.addEventListener('contextmenu', (e) => e.preventDefault()); // right button = eraser
     canvas.addEventListener('pointermove', moveStroke);
     canvas.addEventListener('pointerup', endStroke);
     canvas.addEventListener('pointercancel', endStroke);
@@ -6707,7 +6775,7 @@ RemminStore.ready.then(() => {
         if (!ids.length) {
             // nothing selected: the colour for the next sticky note
             prefs.sticky = color;
-            savePrefs();
+            settingsChanged();
             toast('New sticky notes get this colour');
             return;
         }
@@ -6718,7 +6786,7 @@ RemminStore.ready.then(() => {
             it.color = color;
             if (it.type !== 'text') prefs[it.type] = color;
         });
-        savePrefs();
+        settingsChanged();
         cbRender();
         cbSave();
     }
@@ -7490,7 +7558,7 @@ RemminStore.ready.then(() => {
         if (!c) return;
         const cells = gridCellsOf(note);
         const prev = cells[c.id];
-        const next = gridTool === 'eraser' ? undefined : state.draw.color;
+        const next = gridTool === 'eraser' || (gridStroke && gridStroke.erase) ? undefined : state.draw.color;
         if (prev === next) return;
         if (!gridStroke.changes.has(c.id)) gridStroke.changes.set(c.id, prev);
         if (next) cells[c.id] = next; else delete cells[c.id];
@@ -7504,13 +7572,18 @@ RemminStore.ready.then(() => {
         e.preventDefault();
         try { gridCanvas.setPointerCapture(e.pointerId); } catch (_) { /* ignore */ }
         const pos = gridPos(e);
-        if (gridTool === 'select') { startGridPick(note, pos, e.altKey); return; }
-        gridStroke = { changes: new Map(), last: pos, type: gridKey(note) };
+        // the right mouse button always erases (whatever tool is chosen)
+        const erase = isEraseButton(e);
+        if (!erase && e.button > 0) return;
+        if (erase && (gridStroke || gridPickDrag || gridMarquee)) return;
+        if (gridTool === 'select' && !erase) { startGridPick(note, pos, e.altKey); return; }
+        gridStroke = { changes: new Map(), last: pos, type: gridKey(note), erase };
         gridPaintAt(note, pos);
     });
+    gridCanvas.addEventListener('contextmenu', (e) => e.preventDefault()); // right button = eraser
 
     gridCanvas.addEventListener('pointermove', (e) => {
-        if (gridTool === 'select') { moveGridPick(e); return; }
+        if (gridTool === 'select' && !gridStroke) { moveGridPick(e); return; }
         if (!gridStroke) return;
         e.preventDefault();
         const note = noteById(state.currentNoteId);
@@ -8361,7 +8434,8 @@ RemminStore.ready.then(() => {
         return JSON.stringify(value === undefined ? null : value);
     }
 
-    const snapshotKey = (snap) => stableStringify({ notes: snap.notes, folders: snap.folders, deleted: snap.deleted, privatePass: snap.privatePass || null, settings: snap.settings || null });
+    const snapshotKey = (snap) => stableStringify({ notes: snap.notes, folders: snap.folders, deleted: snap.deleted, privatePass: snap.privatePass || null, settings: snap.settings || null,
+        trash: (snap.trash || []).map((t) => [t.note.id, t.deletedAt]), trashGone: snap.trashGone || {} });
 
     function localSnapshot() {
         return JSON.parse(JSON.stringify({
@@ -8370,6 +8444,8 @@ RemminStore.ready.then(() => {
             deleted: state.deleted,
             privatePass: privatePass || null,
             settings: syncedSettings(),
+            trash: state.trash,
+            trashGone: state.trashGone,
             updatedAt: state.updatedAt
         }));
     }
@@ -8383,6 +8459,10 @@ RemminStore.ready.then(() => {
             deleted: normalizeDeleted(Array.isArray(data) ? null : data.deleted),
             privatePass: Array.isArray(data) ? null : validPass(data.privatePass),
             settings: Array.isArray(data) ? null : validSettings(data.settings),
+            trash: Array.isArray(data) || !Array.isArray(data.trash) ? [] : data.trash
+                .filter((t) => t && t.note && typeof t.note.id === 'string' && typeof t.deletedAt === 'string')
+                .map((t) => { migrateNote(t.note); return { note: t.note, deletedAt: t.deletedAt }; }),
+            trashGone: Array.isArray(data) || !data.trashGone || typeof data.trashGone !== 'object' ? {} : data.trashGone,
             updatedAt: Array.isArray(data) ? null : (data.updatedAt || null)
         };
         return snap;
@@ -8436,7 +8516,11 @@ RemminStore.ready.then(() => {
         const ls = local.settings || null, rs = remote.settings || null;
         const settings = !ls ? rs : !rs ? ls : (timeOf(ls.at) > timeOf(rs.at) ? ls : rs);
 
-        return { notes, folders, deleted, privatePass: pass, settings, updatedAt: laterIso(local.updatedAt, remote.updatedAt) };
+        // the trash: everything from both sides, minus what was restored or deleted forever
+        const trashGoneAll = mergeGone(local.trashGone, remote.trashGone);
+        const trash = mergeTrash(local.trash, remote.trash, trashGoneAll, new Set(notes.map((n) => n.id)));
+
+        return { notes, folders, deleted, privatePass: pass, settings, trash, trashGone: trashGoneAll, updatedAt: laterIso(local.updatedAt, remote.updatedAt) };
     }
 
     // Holiday choices + clocks from remmin.json / a .json file
@@ -8444,6 +8528,14 @@ RemminStore.ready.then(() => {
         if (set.holidays) state.prefs.holidays = [...set.holidays];
         if (set.clocks) state.prefs.clocks = [...set.clocks];
         if (typeof set.broadcast === 'string') { state.prefs.broadcast = set.broadcast; renderBroadcast(); }
+        if (set.imgSize) state.prefs.imgSize = set.imgSize;
+        if (set.collageColors) state.prefs.collageColors = { ...set.collageColors };
+        if (typeof set.email === 'string') { if (set.email) RemminStore.set(EMAIL_ADDRESS_KEY, set.email); else RemminStore.remove(EMAIL_ADDRESS_KEY); }
+        if (typeof set.alarmSound === 'string' && set.alarmSound !== (RemminStore.get(ALARM_SOUND_KEY) || '')) {
+            if (set.alarmSound) RemminStore.set(ALARM_SOUND_KEY, set.alarmSound); else RemminStore.remove(ALARM_SOUND_KEY);
+            const status = $('alarmSoundStatus');
+            if (status) status.textContent = set.alarmSound ? 'Using custom sound (synced)' : 'Using standard sound';
+        }
         state.prefs.settingsAt = set.at || state.prefs.settingsAt || null;
         savePrefs();
         syncHolidayCheckboxes();
@@ -8457,8 +8549,18 @@ RemminStore.ready.then(() => {
         const before = stableStringify(noteById(state.currentNoteId) || null);
         const knownFolders = new Set(state.folders.map((f) => f.id));
         const incomingIds = new Set(snap.notes.map((n) => n.id));
-        state.notes.filter((n) => !incomingIds.has(n.id)).forEach(addToTrash);
+        state.notes.filter((n) => !incomingIds.has(n.id)).forEach((n) => {
+            state.trash = state.trash.filter((t) => t.note.id !== n.id);
+            // deleted on another device: use the time it was deleted there
+            const at = (snap.deleted && snap.deleted.notes && snap.deleted.notes[n.id]) || new Date().toISOString();
+            state.trash.unshift({ note: JSON.parse(JSON.stringify(n)), deletedAt: at });
+        });
         state.notes = snap.notes.map((n) => { migrateNote(n); return n; });
+        // the synced trash
+        state.trashGone = mergeGone(state.trashGone, snap.trashGone);
+        state.trash = mergeTrash(state.trash, snap.trash, state.trashGone, incomingIds);
+        saveTrash();
+        if ($('trashModal').classList.contains('active')) renderTrash();
         state.folders = snap.folders;
         state.deleted = snap.deleted;
         state.updatedAt = snap.updatedAt;
@@ -8517,7 +8619,9 @@ RemminStore.ready.then(() => {
             notes: snap.notes,
             deleted: snap.deleted,
             ...(snap.privatePass ? { privatePass: snap.privatePass } : {}),
-            ...(snap.settings ? { settings: snap.settings } : {})
+            ...(snap.settings ? { settings: snap.settings } : {}),
+            trash: snap.trash || [],
+            trashGone: snap.trashGone || {}
         };
         const fileText = JSON.stringify(payload, null, 2);
         githubConfig.fileSize = new TextEncoder().encode(fileText).length;
@@ -8614,7 +8718,9 @@ RemminStore.ready.then(() => {
                     updatedAt: snap.updatedAt || new Date().toISOString(),
                     folders: snap.folders, notes: snap.notes, deleted: snap.deleted,
                     ...(snap.privatePass ? { privatePass: snap.privatePass } : {}),
-                    ...(snap.settings ? { settings: snap.settings } : {})
+                    ...(snap.settings ? { settings: snap.settings } : {}),
+                    trash: snap.trash || [],
+                    trashGone: snap.trashGone || {}
                 };
                 const r = await serverRequest('PUT', payload, rev);
                 serverConfig.remoteUpdatedAt = payload.updatedAt;
@@ -8884,7 +8990,9 @@ RemminStore.ready.then(() => {
             notes: state.notes,
             deleted: state.deleted,
             ...(privatePass ? { privatePass } : {}),
-            ...(syncedSettings() ? { settings: syncedSettings() } : {})
+            ...(syncedSettings() ? { settings: syncedSettings() } : {}),
+            trash: state.trash,
+            trashGone: state.trashGone
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -8939,6 +9047,9 @@ RemminStore.ready.then(() => {
                 state.folders = merged.folders;
             }
             // no pass on this device yet: take the one from the file
+            state.trashGone = mergeGone(state.trashGone, snap.trashGone);
+            state.trash = mergeTrash(state.trash, snap.trash, state.trashGone, new Set(state.notes.map((n) => n.id)));
+            saveTrash(true);
             if (snap.settings) {
                 const mine = syncedSettings();
                 if (!mine || timeOf(snap.settings.at) > timeOf(mine.at)) applySettings(snap.settings);
@@ -9149,6 +9260,7 @@ RemminStore.ready.then(() => {
         reader.onload = () => {
             try {
                 RemminStore.set('remmin.alarmSound.v1', reader.result);
+                settingsChanged();
                 $('alarmSoundStatus').textContent = `Using custom sound: ${file.name}`;
                 toast('Custom alarm sound saved');
             } catch (_) { toast('This sound file is too large to store in browser storage'); }
@@ -9157,6 +9269,7 @@ RemminStore.ready.then(() => {
     });
     $('standardAlarmSoundBtn').addEventListener('click', () => {
         RemminStore.remove('remmin.alarmSound.v1');
+        settingsChanged();
         $('alarmSoundFile').value = '';
         $('alarmSoundStatus').textContent = 'Using standard sound';
         toast('Standard alarm sound selected');
