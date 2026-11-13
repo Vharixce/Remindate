@@ -1,4 +1,4 @@
-/* Remindate – email reminders
+/* Remmin – email reminders
  *
  * Runs in GitHub Actions every ~10 minutes (see .github/workflows/email-reminders.yml).
  * 1. Reads notes.json from your private data repo.
@@ -15,8 +15,8 @@ const env = (name, fallback = '') => (process.env[name] || fallback).trim();
 
 const CONFIG = {
     token: env('DATA_TOKEN'),
-    repo: env('DATA_REPO', 'Vharixce/Remindate-DATA-PRIVATE'),
-    path: env('DATA_PATH', 'notes.json'),
+    repo: env('DATA_REPO', 'Vharixce/Remmin-DATA-PRIVATE'),
+    path: env('DATA_PATH', 'remmin.json'),
     statePath: env('STATE_PATH', 'remindate-email-state.json'),
     apiBase: env('GITHUB_API', 'https://api.github.com'),
     gmailUser: env('GMAIL_USER'),
@@ -43,7 +43,7 @@ async function gh(method, path, body, accept = 'application/vnd.github+json') {
             Accept: accept,
             Authorization: `Bearer ${CONFIG.token}`,
             'X-GitHub-Api-Version': '2022-11-28',
-            'User-Agent': 'remindate-email-reminders',
+            'User-Agent': 'remmin-email-reminders',
             ...(body ? { 'Content-Type': 'application/json' } : {})
         },
         ...(body ? { body: JSON.stringify(body) } : {})
@@ -151,22 +151,22 @@ function buildMail(note, occ) {
     if (/<img\b/i.test(note.html || '')) extras.push('images');
     if (/data-voice=/i.test(note.html || '')) extras.push('voice notes');
     if ((note.strokes || []).length) extras.push('a drawing');
-    const extraLine = extras.length ? `This note also contains ${extras.join(', ')} – open Remindate to see them.` : '';
+    const extraLine = extras.length ? `This note also contains ${extras.join(', ')} – open Remmin to see them.` : '';
     const when = describe(occ);
     const repeating = repeatModeOf(note) !== 'none';
 
     const lines = [`⏰ ${title}`, `Scheduled for ${when}${repeating ? ' (repeating)' : ''}`, ''];
     if (text) lines.push(text, '');
     if (extraLine) lines.push(extraLine, '');
-    if (CONFIG.appUrl) lines.push(`Open Remindate: ${CONFIG.appUrl}`);
+    if (CONFIG.appUrl) lines.push(`Open Remmin: ${CONFIG.appUrl}`);
 
     const html = `<div style="font-family:Inter,Segoe UI,Arial,sans-serif;max-width:560px;margin:auto;padding:20px;color:#1f2937">
-  <div style="font-size:13px;color:#6b7280;margin-bottom:6px">Remindate reminder</div>
+  <div style="font-size:13px;color:#6b7280;margin-bottom:6px">Remmin reminder</div>
   <h2 style="margin:0 0 6px;font-size:20px">⏰ ${escapeHtml(title)}</h2>
   <div style="font-size:14px;color:#4b5563;margin-bottom:16px">${escapeHtml(when)}${repeating ? ' · repeating' : ''}</div>
   ${text ? `<div style="white-space:pre-wrap;font-size:15px;line-height:1.55;padding:14px 16px;background:#f3f4f6;border-radius:10px">${escapeHtml(text)}</div>` : ''}
   ${extraLine ? `<p style="font-size:13px;color:#6b7280">${escapeHtml(extraLine)}</p>` : ''}
-  ${CONFIG.appUrl ? `<p style="margin-top:18px"><a href="${escapeHtml(CONFIG.appUrl)}" style="background:#7c6ff0;color:#fff;padding:9px 16px;border-radius:8px;text-decoration:none;font-size:14px">Open Remindate</a></p>` : ''}
+  ${CONFIG.appUrl ? `<p style="margin-top:18px"><a href="${escapeHtml(CONFIG.appUrl)}" style="background:#7c6ff0;color:#fff;padding:9px 16px;border-radius:8px;text-decoration:none;font-size:14px">Open Remmin</a></p>` : ''}
 </div>`;
 
     return {
@@ -222,12 +222,12 @@ async function main() {
     if (!due.length) return;
 
     const transport = makeTransport();
-    const fromAddress = CONFIG.from || (CONFIG.smtpHost ? CONFIG.smtpUser : CONFIG.gmailUser) || 'remindate@example.com';
+    const fromAddress = CONFIG.from || (CONFIG.smtpHost ? CONFIG.smtpUser : CONFIG.gmailUser) || 'remmin@example.com';
     let sent = 0, failed = 0;
     for (const { note, occ, key } of due) {
         try {
             const mail = buildMail(note, occ);
-            const info = await transport.sendMail({ from: `Remindate <${fromAddress}>`, ...mail });
+            const info = await transport.sendMail({ from: `Remmin <${fromAddress}>`, ...mail });
             if (CONFIG.dryRun && process.env.DRY_RUN_PRINT === '1') console.log(info.message);
             state.sent[key] = now.toISOString();
             sent++;
@@ -244,7 +244,7 @@ async function main() {
 
     if (sent) {
         await writeFile(CONFIG.statePath, JSON.stringify(state, null, 2), stateFile && stateFile.sha,
-            `Remindate: ${sent} email reminder(s) sent`);
+            `Remmin: ${sent} email reminder(s) sent`);
     }
     console.log(`Sent ${sent} email(s)${failed ? `, ${failed} failed` : ''}.`);
     if (failed && !sent) process.exitCode = 1;

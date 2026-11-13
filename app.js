@@ -1,4 +1,4 @@
-/* Remindate Web
+/* Remmin Web
  * Notes, folders, calendar and drawing. All data is stored locally in the browser
  * (IndexedDB, with room for much more than the ~5 MB of local storage), so no server
  * or account is required. GitHub / a server can keep a synced copy.
@@ -9,10 +9,14 @@
  * every change is written to IndexedDB right after. Data that was still in local
  * storage (older versions) is moved over once. If IndexedDB can't be used (some
  * private windows), local storage is used as before. */
-const RemindateStore = (() => {
-    const DB_NAME = 'remindate';
+const RemminStore = (() => {
+    const DB_NAME = 'remmin';
     const STORE = 'kv';
     const MIGRATED = '__migratedFromLocalStorage';
+    // the app used to be called Remindate: its data is moved over once (the old copy is kept)
+    const OLD_DB_NAME = 'remindate';
+    const OLD_PREFIX = 'remindate.';
+    const renameKey = (k) => (k.startsWith(OLD_PREFIX) ? `remmin.${k.slice(OLD_PREFIX.length)}` : k);
     const cache = new Map();
     const pending = new Map(); // key -> string (write) or null (delete)
     let db = null;
@@ -26,15 +30,43 @@ const RemindateStore = (() => {
         try {
             for (let i = 0; i < localStorage.length; i++) {
                 const k = localStorage.key(i);
-                if (k && k.startsWith('remindate.')) keys.push(k);
+                if (k && (k.startsWith('remmin.') || k.startsWith(OLD_PREFIX))) keys.push(k);
             }
         } catch (_) { /* no local storage */ }
         return keys;
     };
     const loadFromLocal = () => {
         useLocal = true;
-        localKeys().forEach((k) => cache.set(k, localStorage.getItem(k)));
+        const keys = localKeys();
+        // new names first, then old (Remindate) names that have no new copy yet
+        keys.filter((k) => !k.startsWith(OLD_PREFIX)).forEach((k) => cache.set(k, localStorage.getItem(k)));
+        keys.filter((k) => k.startsWith(OLD_PREFIX)).forEach((k) => {
+            const nk = renameKey(k);
+            if (cache.has(nk)) return;
+            const v = localStorage.getItem(k);
+            cache.set(nk, v);
+            try { localStorage.setItem(nk, v); localStorage.removeItem(k); } catch (_) { /* keep the old one */ }
+        });
     };
+    // everything in the old "remindate" IndexedDB (if there is one), without creating it
+    const readOldDb = () => new Promise((resolve) => {
+        const found = new Map();
+        let req;
+        try { req = indexedDB.open(OLD_DB_NAME); } catch (_) { resolve(found); return; }
+        req.onupgradeneeded = () => { req.transaction.abort(); }; // it didn't exist: don't make it
+        req.onerror = () => resolve(found);
+        req.onblocked = () => resolve(found);
+        req.onsuccess = () => {
+            const old = req.result;
+            if (!old.objectStoreNames.contains(STORE)) { old.close(); resolve(found); return; }
+            const store = old.transaction(STORE, 'readonly').objectStore(STORE);
+            Promise.all([reqDone(store.getAllKeys()), reqDone(store.getAll())])
+                .then(([keys, values]) => { keys.forEach((k, i) => found.set(String(k), values[i])); })
+                .catch(() => {})
+                .finally(() => { old.close(); resolve(found); });
+        };
+        setTimeout(() => resolve(found), 4000);
+    });
     const reqDone = (req) => new Promise((resolve, reject) => {
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
@@ -64,14 +96,20 @@ const RemindateStore = (() => {
         keys.forEach((k, i) => cache.set(String(k), values[i]));
 
         if (!cache.has(MIGRATED)) {
-            // move what older versions kept in local storage into IndexedDB (once)
+            // move what older versions kept (the Remindate database, or local storage) in here (once)
+            const oldDb = await readOldDb();
             const keysToMove = localKeys();
+            const moved = new Map();
+            oldDb.forEach((v, k) => { if (k !== MIGRATED) moved.set(renameKey(k), v); });
+            keysToMove.forEach((k) => {
+                const nk = renameKey(k);
+                const v = localStorage.getItem(k);
+                if (v !== null && !moved.has(nk)) moved.set(nk, v);
+            });
             const wtx = db.transaction(STORE, 'readwrite');
             const ws = wtx.objectStore(STORE);
-            keysToMove.forEach((k) => {
+            moved.forEach((v, k) => {
                 if (cache.has(k)) return;
-                const v = localStorage.getItem(k);
-                if (v === null) return;
                 cache.set(k, v);
                 ws.put(v, k);
             });
@@ -128,7 +166,7 @@ const RemindateStore = (() => {
         get: (key) => (cache.has(key) ? cache.get(key) : null),
         set(key, value) { cache.set(key, value); pending.set(key, value); queue(); onChange(); },
         remove(key) { cache.delete(key); pending.set(key, null); queue(); onChange(); },
-        // roughly how many bytes Remindate keeps on this device
+        // roughly how many bytes Remmin keeps on this device
         bytes() { let n = 0; cache.forEach((v, k) => { n += k.length + (v ? v.length : 0); }); return n; },
         onChange(fn) { onChange = fn; },
         flush,
@@ -137,20 +175,20 @@ const RemindateStore = (() => {
     };
 })();
 
-RemindateStore.ready.then(() => {
+RemminStore.ready.then(() => {
     'use strict';
 
     const STORAGE = {
-        notes: 'remindate.notes.v1',
-        privatePass: 'remindate.privatePass.v1',
-        folders: 'remindate.folders.v1',
-        prefs: 'remindate.prefs.v1',
-        alarms: 'remindate.alarms.v1',
-        deleted: 'remindate.deleted.v1',
-        trash: 'remindate.trash.v1',
-        updatedAt: 'remindate.updatedAt.v1',
-        github: 'remindate.github.v1',
-        server: 'remindate.server.v1'
+        notes: 'remmin.notes.v1',
+        privatePass: 'remmin.privatePass.v1',
+        folders: 'remmin.folders.v1',
+        prefs: 'remmin.prefs.v1',
+        alarms: 'remmin.alarms.v1',
+        deleted: 'remmin.deleted.v1',
+        trash: 'remmin.trash.v1',
+        updatedAt: 'remmin.updatedAt.v1',
+        github: 'remmin.github.v1',
+        server: 'remmin.server.v1'
     };
 
 
@@ -217,7 +255,7 @@ RemindateStore.ready.then(() => {
 
     function readJSON(key, fallback) {
         try {
-            const raw = RemindateStore.get(key);
+            const raw = RemminStore.get(key);
             return raw ? JSON.parse(raw) : fallback;
         } catch (err) {
             console.warn('Could not read data:', key, err);
@@ -227,7 +265,7 @@ RemindateStore.ready.then(() => {
 
     function writeJSON(key, value) {
         try {
-            RemindateStore.set(key, JSON.stringify(value));
+            RemminStore.set(key, JSON.stringify(value));
         } catch (err) {
             reportSaveError(err);
         }
@@ -239,7 +277,7 @@ RemindateStore.ready.then(() => {
         lastSaveError = Date.now();
         toast('Save failed: your browser storage is full or unavailable.');
     }
-    RemindateStore.onError(reportSaveError);
+    RemminStore.onError(reportSaveError);
 
     function load() {
         state.notes = readJSON(STORAGE.notes, []);
@@ -392,7 +430,7 @@ RemindateStore.ready.then(() => {
         scheduleGithubSave();
     };
     const savePrefs = () => writeJSON(STORAGE.prefs, state.prefs);
-    // Holiday choices and world clocks also go into remindate.json (the newest change wins)
+    // Holiday choices and world clocks also go into remmin.json (the newest change wins)
     function settingsChanged() {
         state.prefs.settingsAt = new Date().toISOString();
         savePrefs();
@@ -709,7 +747,7 @@ RemindateStore.ready.then(() => {
         const header = e.target.closest && e.target.closest('.folder-header[draggable="true"]');
         if (!header || e.target.closest('.note-item')) return;
         draggedFolderId = header.dataset.folderId;
-        e.dataTransfer.setData('application/x-remindate-folder', draggedFolderId);
+        e.dataTransfer.setData('application/x-remmin-folder', draggedFolderId);
         e.dataTransfer.effectAllowed = 'move';
         header.classList.add('dragging');
     });
@@ -1390,7 +1428,7 @@ RemindateStore.ready.then(() => {
     /* ---------------- private notes ----------------
      * A private note asks for the "Private Note Pass" every time it is opened.
      * The pass is kept as a salted hash (never as plain text), on this device and in
-     * remindate.json, so every synced device uses the same pass.
+     * remmin.json, so every synced device uses the same pass.
      * Note: this locks the note in the app; the note itself is not encrypted. */
     let privatePass = readJSON(STORAGE.privatePass, null);
     let unlockedNoteId = null;
@@ -1428,9 +1466,9 @@ RemindateStore.ready.then(() => {
         privatePass = { salt, iterations, hash: await hashPass(pass, salt, iterations), setAt: new Date().toISOString() };
         writeJSON(STORAGE.privatePass, privatePass);
         markChanged();
-        scheduleGithubSave(); // the (hashed) pass goes into remindate.json too
+        scheduleGithubSave(); // the (hashed) pass goes into remmin.json too
     }
-    // a pass from remindate.json / a .json file is only used when it looks right
+    // a pass from remmin.json / a .json file is only used when it looks right
     const validPass = (p) => (p && typeof p === 'object' && typeof p.salt === 'string' && typeof p.hash === 'string' &&
         Number.isFinite(p.iterations) ? { salt: p.salt, iterations: p.iterations, hash: p.hash, ...(p.setAt ? { setAt: p.setAt } : {}) } : null);
 
@@ -2281,7 +2319,7 @@ RemindateStore.ready.then(() => {
         }
         const html = dt.getData('text/html');
         // a piece copied from the drawing or the grid: insert it like any other picture
-        const own = html && /<img[^>]*data-remindate-copy[^>]*src="(data:image\/[^"]+)"/i.exec(html);
+        const own = html && /<img[^>]*data-(?:remmin|remindate)-copy[^>]*src="(data:image\/[^"]+)"/i.exec(html);
         if (own) {
             e.preventDefault();
             fetch(own[1]).then((r) => r.blob())
@@ -3468,9 +3506,9 @@ RemindateStore.ready.then(() => {
     $('alarmEnabled').addEventListener('change', scheduleChanged);
 
     /* ---- email notification (sent by the GitHub Action, see EMAIL-SETUP.md) ---- */
-    const EMAIL_KEY = 'remindate.emailAddress.v1';
+    const EMAIL_KEY = 'remmin.emailAddress.v1';
     const EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+\.[^\s@<>"']{2,}$/;
-    const defaultEmail = () => RemindateStore.get(EMAIL_KEY) || '';
+    const defaultEmail = () => RemminStore.get(EMAIL_KEY) || '';
 
     // Who is the email popup for? The open note, or the "Schedule note" window.
     let emailTarget = null;
@@ -3511,7 +3549,7 @@ RemindateStore.ready.then(() => {
         if (!emailTarget.isPlan && !note.scheduledAt) notes.push('This note has no date yet: pick a date and time in the Scheduled card.');
         if (!sync) notes.push('Emails are sent via GitHub using your synced notes, so turn on <b>GitHub Sync</b> (with automatic sync).');
         else if (!githubConfig.autoSync) notes.push('Turn on <b>automatic sync</b> in GitHub Sync settings, or press “Sync now” after changes, so GitHub knows about this note.');
-        notes.push('Emails are sent by the “Remindate email reminders” Google Apps Script, which checks your synced notes every minute (see <b>EMAIL-SETUP.md</b>).');
+        notes.push('Emails are sent by the “Remmin email reminders” Google Apps Script, which checks your synced notes every minute (see <b>EMAIL-SETUP.md</b>).');
         $('emailStatus').innerHTML = notes.map((t) => `<div>• ${t}</div>`).join('');
         openModal('emailModal');
         setTimeout(() => $('emailAddress').focus(), 30);
@@ -3531,7 +3569,7 @@ RemindateStore.ready.then(() => {
             $('emailAddress').focus();
             return;
         }
-        if ($('emailRemember').checked) RemindateStore.set(EMAIL_KEY, address);
+        if ($('emailRemember').checked) RemminStore.set(EMAIL_KEY, address);
         emailTarget.save(address);
         closeEmailModal();
         toast(`Email notification on → ${address}`);
@@ -3573,22 +3611,22 @@ RemindateStore.ready.then(() => {
         if (code && githubConfigured()) {
             code = code
                 .replace(/dataRepo: '[^']*'/, `dataRepo: '${githubConfig.owner}/${githubConfig.repo}'`)
-                .replace(/dataPath: '[^']*'/, `dataPath: '${githubConfig.path || 'remindate.json'}'`)
-                .replace(/appUrl: '[^']*'/, `appUrl: '${location.protocol.startsWith('http') ? location.href.split(/[?#]/)[0] : 'https://vharixce.github.io/Remindate/'}'`);
+                .replace(/dataPath: '[^']*'/, `dataPath: '${githubConfig.path || 'remmin.json'}'`)
+                .replace(/appUrl: '[^']*'/, `appUrl: '${location.protocol.startsWith('http') ? location.href.split(/[?#]/)[0] : 'https://vharixce.github.io/Remmin/'}'`);
         }
         return code;
     }
 
     async function openEmailHelp() {
         $('emailHelpRepo').innerHTML = githubConfigured()
-            ? `✔ GitHub Sync is set up: <code>${escapeHtml(githubConfig.owner)}/${escapeHtml(githubConfig.repo)}/${escapeHtml(githubConfig.path || 'remindate.json')}</code>. The code you copy below already uses this repo.`
+            ? `✔ GitHub Sync is set up: <code>${escapeHtml(githubConfig.owner)}/${escapeHtml(githubConfig.repo)}/${escapeHtml(githubConfig.path || 'remmin.json')}</code>. The code you copy below already uses this repo.`
             : '⚠ GitHub Sync is not set up on this device yet. Do that first, then come back here, so the copied code uses your repo.';
         $('emailHelpCopyStatus').textContent = '';
         $('emailHelpCode').hidden = true;
         $('emailHelpToggleCode').textContent = 'Show code';
         openModal('emailHelpModal');
         const code = await loadEmailScriptCode();
-        $('emailHelpCode').value = code || '// Could not load the code here.\n// Open scripts/email-reminders.gs in the Remindate folder and copy everything in it.';
+        $('emailHelpCode').value = code || '// Could not load the code here.\n// Open scripts/email-reminders.gs in the Remmin folder and copy everything in it.';
         $('emailHelpCopy').disabled = !code;
     }
 
@@ -5511,7 +5549,7 @@ RemindateStore.ready.then(() => {
     let marquee = null;    // { a, b } while dragging a selection box
     let pickDrag = null;   // while moving the selection
     let drawClipboard = null;
-    const COPY_MARK = '[Remindate drawing selection]';
+    const COPY_MARK = '[Remmin drawing selection]';
 
     function cloneItem(s) {
         if (s.image) return { ...s };
@@ -5752,7 +5790,7 @@ RemindateStore.ready.then(() => {
         drawPick.forEach((s) => drawStroke(s, g, W * scale, H * scale, -x0 * scale, -y0 * scale));
         return out.toDataURL('image/png');
     }
-    const copyImgHtml = (src) => (src ? `<img data-remindate-copy="1" src="${src}">` : '');
+    const copyImgHtml = (src) => (src ? `<img data-remmin-copy="1" src="${src}">` : '');
 
     ['copy', 'cut'].forEach((type) => document.addEventListener(type, (e) => {
         if (!drawPickActive() || state.draw.tool !== 'select' || !drawPick.length) return;
@@ -6204,7 +6242,7 @@ RemindateStore.ready.then(() => {
     const cbEls = new Map();
     let cbClipboard = null;
     let cbSpace = false;
-    const CB_MARK = 'remindate-collage-copy';
+    const CB_MARK = 'remmin-collage-copy';
 
     const cbById = (id) => cb.items.find((i) => i.id === id) || null;
     const cbActive = () => state.prefs.mode === 'collage' && state.prefs.activeTab !== 'calendar' && !!cb.noteId &&
@@ -7509,7 +7547,7 @@ RemindateStore.ready.then(() => {
     let gridPickDrag = null;  // while moving the selection
     let gridCopyMode = false; // the next move leaves the originals where they are (a copy)
     let gridClipboard = null; // { key, cells: [[id, colour]] }
-    const GRID_COPY_MARK = '[Remindate grid selection]';
+    const GRID_COPY_MARK = '[Remmin grid selection]';
     const cellCenter = (c) => {
         let x = 0, y = 0;
         c.pts.forEach(([px, py]) => { x += px; y += py; });
@@ -8141,11 +8179,12 @@ RemindateStore.ready.then(() => {
     /* ---------------- GitHub-sync ---------------- */
 
     let githubConfig = readJSON(STORAGE.github, {});
-    // The data file used to be called notes.json: switch to remindate.json. The first sync
-    // reads the old file once and saves everything as remindate.json (the old file stays untouched).
-    if (githubConfig.path === 'notes.json') {
-        githubConfig.path = 'remindate.json';
-        githubConfig.legacyPath = 'notes.json';
+    // The data file used to be called remindate.json (and before that notes.json): switch to
+    // remmin.json. The first sync reads the old file once and saves everything as remmin.json
+    // (the old file stays untouched, as a backup).
+    if (githubConfig.path === 'notes.json' || githubConfig.path === 'remindate.json') {
+        githubConfig.legacyPath = githubConfig.path;
+        githubConfig.path = 'remmin.json';
         githubConfig.sha = null;
         writeJSON(STORAGE.github, githubConfig);
     }
@@ -8185,7 +8224,7 @@ RemindateStore.ready.then(() => {
     function showGithubSettings() {
         $('ghOwner').value = githubConfig.owner || '';
         $('ghRepo').value = githubConfig.repo || '';
-        $('ghPath').value = githubConfig.path || 'remindate.json';
+        $('ghPath').value = githubConfig.path || 'remmin.json';
         $('ghToken').value = githubConfig.token || '';
         $('ghAutoSync').checked = !!githubConfig.autoSync;
         openModal('githubModal');
@@ -8276,7 +8315,7 @@ RemindateStore.ready.then(() => {
 
     function normalizeSnapshot(data) {
         const notes = Array.isArray(data) ? data : data.notes;
-        if (!Array.isArray(notes)) throw new Error('remindate.json on GitHub does not contain a valid note list');
+        if (!Array.isArray(notes)) throw new Error('remmin.json on GitHub does not contain a valid note list');
         const snap = {
             notes: notes.map((n) => { migrateNote(n); return n; }),
             folders: (Array.isArray(data) ? [] : (data.folders || [])).map((f) => { migrateFolder(f); return f; }),
@@ -8328,18 +8367,18 @@ RemindateStore.ready.then(() => {
         const notes = mergeList('notes', local.notes, remote.notes)
             .map((n) => (n.folderId && !folderIds.has(n.folderId) ? { ...n, folderId: null } : n));
 
-        // the pass that was set (or changed) last wins; with no dates, the one in remindate.json
+        // the pass that was set (or changed) last wins; with no dates, the one in remmin.json
         const lp = local.privatePass || null, rp = remote.privatePass || null;
         const pass = !lp ? rp : !rp ? lp : (timeOf(lp.setAt) > timeOf(rp.setAt) ? lp : rp);
 
-        // holiday choices + clocks: the newest change wins; with no dates, the ones in remindate.json
+        // holiday choices + clocks: the newest change wins; with no dates, the ones in remmin.json
         const ls = local.settings || null, rs = remote.settings || null;
         const settings = !ls ? rs : !rs ? ls : (timeOf(ls.at) > timeOf(rs.at) ? ls : rs);
 
         return { notes, folders, deleted, privatePass: pass, settings, updatedAt: laterIso(local.updatedAt, remote.updatedAt) };
     }
 
-    // Holiday choices + clocks from remindate.json / a .json file
+    // Holiday choices + clocks from remmin.json / a .json file
     function applySettings(set) {
         if (set.holidays) state.prefs.holidays = [...set.holidays];
         if (set.clocks) state.prefs.clocks = [...set.clocks];
@@ -8392,7 +8431,7 @@ RemindateStore.ready.then(() => {
         let url = githubUrl();
         let legacy = false;
         if (!meta && githubConfig.legacyPath) {
-            // remindate.json doesn't exist yet: start from the old notes.json
+            // remmin.json doesn't exist yet: start from the old remindate.json / notes.json
             url = githubUrl(githubConfig.legacyPath);
             meta = await githubRequest('GET', null, url);
             legacy = true;
@@ -8403,13 +8442,13 @@ RemindateStore.ready.then(() => {
         if (meta.content && meta.encoding === 'base64') text = decodeGithubFile(meta.content);
         else text = await githubRequest('GET', null, url, 'application/vnd.github.raw+json'); // files > 1 MB
         const data = text && text.trim() ? JSON.parse(text) : [];
-        // from the old file: no sha, so the push creates remindate.json, and always push once
+        // from the old file: no sha, so the push creates remmin.json, and always push once
         return legacy ? { sha: null, data, legacy: true } : { sha: meta.sha, data };
     }
 
     async function pushRemote(snap, sha) {
         const payload = {
-            app: 'Remindate',
+            app: 'Remmin',
             version: 1,
             updatedAt: snap.updatedAt || new Date().toISOString(),
             folders: snap.folders,
@@ -8421,7 +8460,7 @@ RemindateStore.ready.then(() => {
         const fileText = JSON.stringify(payload, null, 2);
         githubConfig.fileSize = new TextEncoder().encode(fileText).length;
         const result = await githubRequest('PUT', {
-            message: `Remindate sync ${new Date().toISOString()}`,
+            message: `Remmin sync ${new Date().toISOString()}`,
             content: encodeGithubFile(fileText),
             ...(sha ? { sha } : {})
         });
@@ -8430,15 +8469,15 @@ RemindateStore.ready.then(() => {
         }
         githubConfig.sha = result.content.sha;
         githubConfig.remoteUpdatedAt = payload.updatedAt;
-        delete githubConfig.legacyPath; // remindate.json exists now
+        delete githubConfig.legacyPath; // remmin.json exists now
     }
 
     /* ---------------- Server sync (your own server / paid hosting) ----------------
      * Protocol (kept tiny so any server can do it):
-     *   GET  <url>  -> 200 + the remindate.json content (ETag header = version), or 404 when empty
+     *   GET  <url>  -> 200 + the remmin.json content (ETag header = version), or 404 when empty
      *   PUT  <url>  -> stores the JSON body; with "If-Match: <etag>" it answers 412 if
      *                  someone else saved in between. Answers with the new ETag.
-     * Auth: "Authorization: Bearer <token>". scripts/remindate-sync-server.js does exactly this. */
+     * Auth: "Authorization: Bearer <token>". scripts/remmin-sync-server.js does exactly this. */
     let serverConfig = readJSON(STORAGE.server, {});
     const serverConfigured = () => !!serverConfig.url;
 
@@ -8487,7 +8526,7 @@ RemindateStore.ready.then(() => {
             save: () => writeJSON(STORAGE.github, githubConfig),
             async fetch() {
                 const r = await fetchRemote();
-                // coming from the old notes.json: always write remindate.json once
+                // coming from the old remindate.json / notes.json: always write remmin.json once
                 if (r && r.legacy) return { rev: null, data: r.data, forcePush: true };
                 return r && { rev: r.sha, data: r.data };
             },
@@ -8509,7 +8548,7 @@ RemindateStore.ready.then(() => {
             },
             async push(snap, rev) {
                 const payload = {
-                    app: 'Remindate', version: 1,
+                    app: 'Remmin', version: 1,
                     updatedAt: snap.updatedAt || new Date().toISOString(),
                     folders: snap.folders, notes: snap.notes, deleted: snap.deleted,
                     ...(snap.privatePass ? { privatePass: snap.privatePass } : {}),
@@ -8669,7 +8708,7 @@ RemindateStore.ready.then(() => {
     });
     $('serverClearBtn').addEventListener('click', () => {
         serverConfig = {};
-        RemindateStore.remove(STORAGE.server);
+        RemminStore.remove(STORAGE.server);
         $('srvUrl').value = '';
         $('srvToken').value = '';
         $('srvAutoSync').checked = false;
@@ -8712,10 +8751,10 @@ RemindateStore.ready.then(() => {
     });
     $('githubClearBtn').addEventListener('click', () => {
         githubConfig = {};
-        RemindateStore.remove(STORAGE.github);
+        RemminStore.remove(STORAGE.github);
         $('ghOwner').value = '';
         $('ghRepo').value = '';
-        $('ghPath').value = 'remindate.json';
+        $('ghPath').value = 'remmin.json';
         $('ghToken').value = '';
         $('ghAutoSync').checked = false;
         updateGithubStatus();
@@ -8775,7 +8814,7 @@ RemindateStore.ready.then(() => {
             if (!(await checkPass(pass))) { toast('Wrong pass, the file was not saved'); return; }
         }
         const payload = {
-            app: 'Remindate',
+            app: 'Remmin',
             version: 1,
             exportedAt: new Date().toISOString(),
             updatedAt: state.updatedAt,
@@ -8789,7 +8828,7 @@ RemindateStore.ready.then(() => {
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `remindate-${dayKey(new Date())}.json`;
+        a.download = `remmin-${dayKey(new Date())}.json`;
         a.rel = 'noopener';
         // Firefox needs the link in the page; Safari/Firefox need the URL to live a moment longer
         document.body.appendChild(a);
@@ -8808,7 +8847,7 @@ RemindateStore.ready.then(() => {
             try {
                 snap = normalizeSnapshot(JSON.parse(reader.result));
             } catch (err) {
-                toast('This is not a Remindate .json file');
+                toast('This is not a Remmin .json file');
                 return;
             }
             flushEditor();
@@ -8927,7 +8966,7 @@ RemindateStore.ready.then(() => {
     function showAlarm(note, dueTime, ring = 1, lastRing = false) {
         const title = note.title.trim() || 'Untitled';
         const body = note.private ? 'Private note' : (note.content.trim().slice(0, 120) || 'Scheduled note');
-        notify(`⏰ ${title}`, body, 'remindate-alarm-' + note.id);
+        notify(`⏰ ${title}`, body, 'remmin-alarm-' + note.id);
         playAlarmSound();
         const snooze = Math.max(1, Number(note.alarmSnoozeMinutes) || 5);
         const runtimeFor = () => {
@@ -9014,7 +9053,7 @@ RemindateStore.ready.then(() => {
     function playAlarmSound() {
         stopAlarmSound();
         alarmStopTimer = setTimeout(stopAlarmSound, ALARM_MAX_SOUND_MS);
-        const saved = RemindateStore.get('remindate.alarmSound.v1');
+        const saved = RemminStore.get('remmin.alarmSound.v1');
         if (saved) {
             alarmAudio = new Audio(saved);
             alarmAudio.loop = true;
@@ -9047,7 +9086,7 @@ RemindateStore.ready.then(() => {
         const reader = new FileReader();
         reader.onload = () => {
             try {
-                RemindateStore.set('remindate.alarmSound.v1', reader.result);
+                RemminStore.set('remmin.alarmSound.v1', reader.result);
                 $('alarmSoundStatus').textContent = `Using custom sound: ${file.name}`;
                 toast('Custom alarm sound saved');
             } catch (_) { toast('This sound file is too large to store in browser storage'); }
@@ -9055,7 +9094,7 @@ RemindateStore.ready.then(() => {
         reader.readAsDataURL(file);
     });
     $('standardAlarmSoundBtn').addEventListener('click', () => {
-        RemindateStore.remove('remindate.alarmSound.v1');
+        RemminStore.remove('remmin.alarmSound.v1');
         $('alarmSoundFile').value = '';
         $('alarmSoundStatus').textContent = 'Using standard sound';
         toast('Standard alarm sound selected');
@@ -9071,7 +9110,7 @@ RemindateStore.ready.then(() => {
         setTimeout(() => { $('testAlarmSoundBtn').textContent = 'Test sound'; }, ALARM_MAX_SOUND_MS);
     });
     $('openAlarmSoundSettings').addEventListener('click', () => {
-        const customSound = RemindateStore.get('remindate.alarmSound.v1');
+        const customSound = RemminStore.get('remmin.alarmSound.v1');
         $('alarmSoundStatus').textContent = customSound ? 'Using a custom sound' : 'Using standard sound';
         $('alarmSoundModal').classList.add('active');
     });
@@ -9422,14 +9461,14 @@ RemindateStore.ready.then(() => {
         clearTimeout(meterTimer);
         meterTimer = setTimeout(() => {
             setMeter('meterGithub', githubConfigured(), Number.isFinite(githubConfig.fileSize) ? githubConfig.fileSize : null,
-                GITHUB_FILE_LIMIT, 'Size of remindate.json on GitHub (GitHub allows files up to 100 MB)');
+                GITHUB_FILE_LIMIT, 'Size of remmin.json on GitHub (GitHub allows files up to 100 MB)');
             setMeter('meterServer', serverConfigured(), Number.isFinite(serverConfig.fileSize) ? serverConfig.fileSize : null,
                 null, 'Size of your notes on your server');
-            const quota = RemindateStore.usingIndexedDB ? localQuota : 5 * 1024 * 1024;
-            setMeter('meterLocal', true, RemindateStore.bytes(), quota,
-                RemindateStore.usingIndexedDB
-                    ? 'Remindate data saved offline on this device (IndexedDB), out of the space your browser allows'
-                    : 'Remindate data in local storage on this device (about 5 MB is allowed)');
+            const quota = RemminStore.usingIndexedDB ? localQuota : 5 * 1024 * 1024;
+            setMeter('meterLocal', true, RemminStore.bytes(), quota,
+                RemminStore.usingIndexedDB
+                    ? 'Remmin data saved offline on this device (IndexedDB), out of the space your browser allows'
+                    : 'Remmin data in local storage on this device (about 5 MB is allowed)');
         }, 300);
     }
     async function refreshQuota() {
@@ -9438,7 +9477,7 @@ RemindateStore.ready.then(() => {
         } catch (_) { localQuota = null; }
         updateStorageMeters();
     }
-    RemindateStore.onChange(updateStorageMeters);
+    RemminStore.onChange(updateStorageMeters);
 
     /* ---------------- start ---------------- */
 
@@ -9469,8 +9508,8 @@ RemindateStore.ready.then(() => {
 
     window.addEventListener('beforeunload', flushEditor);
     // phones often close a page without beforeunload: save when it goes to the background
-    document.addEventListener('visibilitychange', () => { if (document.hidden) { flushEditor(); RemindateStore.flush(); } });
-    window.addEventListener('pagehide', () => { flushEditor(); RemindateStore.flush(); });
+    document.addEventListener('visibilitychange', () => { if (document.hidden) { flushEditor(); RemminStore.flush(); } });
+    window.addEventListener('pagehide', () => { flushEditor(); RemminStore.flush(); });
     window.addEventListener('resize', () => {
         fitCanvas();
         if (state.prefs.activeTab === 'calendar') renderCalendar();
@@ -9483,5 +9522,5 @@ RemindateStore.ready.then(() => {
     if (autoProviders().length) {
         setTimeout(() => syncAll(autoProviders(), { silent: true }), 400);
     }
-    window.Remindate = { exportData, importData };
+    window.Remmin = { exportData, importData };
 });
