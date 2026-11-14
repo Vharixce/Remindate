@@ -5454,20 +5454,22 @@ RemminStore.ready.then(() => {
 
         viewport.addEventListener('wheel', (e) => {
             if (e.ctrlKey || e.metaKey) {
+                // Ctrl + scroll: zoom in small steps
                 e.preventDefault();
                 const p = local(e);
                 const s0 = z.scale;
-                const s = Math.min(MAX, Math.max(1, s0 * Math.exp(-e.deltaY * 0.0025)));
+                const s = Math.min(MAX, Math.max(1, s0 * wheelZoomFactor(e)));
                 z.tx = p.x - (p.x - z.tx) * (s / s0);
                 z.ty = p.y - (p.y - z.ty) * (s / s0);
                 z.scale = s;
                 apply();
-            } else if (z.scale > 1) {
+            } else if (e.shiftKey) {
+                // Shift + scroll: move the canvas sideways
                 e.preventDefault();
-                z.tx -= e.deltaX;
-                z.ty -= e.deltaY;
+                z.tx -= wheelSideways(e);
                 apply();
             }
+            // plain scrolling is left alone: it moves the page up and down
         }, { passive: false });
 
         if (resetBtn) resetBtn.addEventListener('click', () => { z.scale = 1; apply(); });
@@ -6290,8 +6292,7 @@ RemminStore.ready.then(() => {
         $('modeCollage').classList.toggle('active', mode === 'collage');
         $('collageBoard').style.display = mode === 'collage' ? 'block' : 'none';
         $('collageToolbar').style.display = mode === 'collage' ? 'block' : 'none';
-        $('modeDraw').classList.toggle('active', mode === 'draw');
-        $('modeGrid').classList.toggle('active', mode === 'grid');
+        $('modeDraw').classList.toggle('active', mode === 'draw' || mode === 'grid'); // Grid lives inside Draw
         editorEl.style.display = mode === 'text' ? 'block' : 'none';
         $('textToolbar').style.display = mode === 'text' ? 'block' : 'none';
         drawContainer.style.display = mode === 'draw' ? 'block' : 'none';
@@ -6300,8 +6301,8 @@ RemminStore.ready.then(() => {
         $('gridToolbar').style.display = mode === 'grid' ? 'block' : 'none';
         $('zoomHint').style.display = mode === 'text' ? 'none' : 'block';
         $('zoomHint').textContent = mode === 'collage'
-            ? 'Scroll to zoom · drag with the middle mouse button (or hold Space) to move · double-click to add a sticky note · pinch with two fingers on a phone'
-            : 'Pinch with two fingers to zoom and move · Ctrl + scroll to zoom and middle mouse button to move on a computer';
+            ? 'Ctrl + scroll to zoom · Shift + scroll to move sideways · drag with the middle mouse button (or hold Space) to move · double-click to add a sticky note · pinch with two fingers on a phone'
+            : 'Pinch with two fingers to zoom and move · on a computer: Ctrl + scroll to zoom, Shift + scroll to move sideways, middle mouse button to move';
         if (mode === 'collage') requestAnimationFrame(cbShow);
         if (mode === 'draw') {
             requestAnimationFrame(() => {
@@ -6316,6 +6317,17 @@ RemminStore.ready.then(() => {
     $('modeCollage').addEventListener('click', () => setMode('collage'));
     $('modeDraw').addEventListener('click', () => setMode('draw'));
     $('modeGrid').addEventListener('click', () => setMode('grid'));
+    $('gridBack').addEventListener('click', () => setMode('draw'));
+
+    // Ctrl + scroll zooms in small steps: about 6% per notch of a mouse wheel
+    // (a touchpad pinch sends many small steps and follows your fingers)
+    function wheelZoomFactor(e) {
+        const d = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
+        if (Math.abs(d) >= 40) return d < 0 ? 1.06 : 1 / 1.06;
+        return Math.exp(-d * 0.01);
+    }
+    // Shift + scroll: how far to move sideways (browsers report it as deltaX or deltaY)
+    const wheelSideways = (e) => (e.deltaX || e.deltaY) * (e.deltaMode === 1 ? 33 : 1);
 
     /* ---------------- collage mode: a big board (like Miro) ----------------
      * note.collage = { items: [...] } with items:
@@ -7151,10 +7163,18 @@ RemminStore.ready.then(() => {
 
     cbBoard.addEventListener('wheel', (e) => {
         if (!cbActive()) return;
-        e.preventDefault();
-        const l = cbLocal(e);
-        const k = Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : e.ctrlKey ? 0.01 : 0.0015));
-        cbZoomAt(l.x, l.y, k);
+        if (e.ctrlKey || e.metaKey) {
+            // Ctrl + scroll: zoom in small steps
+            e.preventDefault();
+            const l = cbLocal(e);
+            cbZoomAt(l.x, l.y, wheelZoomFactor(e));
+        } else if (e.shiftKey) {
+            // Shift + scroll: move the board sideways
+            e.preventDefault();
+            cb.view.x -= wheelSideways(e);
+            cbApplyView();
+        }
+        // plain scrolling is left alone: it moves the page up and down
     }, { passive: false });
     cbBoard.addEventListener('auxclick', (e) => { if (e.button === 1) e.preventDefault(); });
     cbBoard.addEventListener('contextmenu', (e) => { if (cbActive() && !cb.editing) e.preventDefault(); });
@@ -8433,7 +8453,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'softer mouse trail';
+    const PATCH_NOTE = 'scroll moves the page, Shift+scroll sideways, Ctrl+scroll zooms; Grid moved into Draw';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {

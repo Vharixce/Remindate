@@ -2042,3 +2042,6 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 
 /* the soft trail behind the mouse (never catches clicks) */
 .mouse-trail { position: fixed; inset: 0; width: 100%; height: 100%; z-index: 9999; pointer-events: none; }
+
+/* the Grid button inside the Draw / Grid toolbars */
+.draw-toolbar .tool-btn.mode-grid-btn { width: auto; padding: 0 10px; white-space: nowrap; }

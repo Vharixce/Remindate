@@ -120,7 +120,6 @@
                             <button class="toggle-btn active" id="modeText">Text</button>
                             <button class="toggle-btn" id="modeCollage">Collage</button>
                             <button class="toggle-btn" id="modeDraw">Draw</button>
-                            <button class="toggle-btn" id="modeGrid">Grid</button>
                         </div>
                     </div>
 
@@ -193,6 +192,7 @@
                             <button class="tool-btn" id="toolUndo" title="Undo">↶</button>
                             <button class="tool-btn" id="toolClear" title="Clear all">✕</button>
                             <button class="tool-btn" id="toolCanvasBg" title="Canvas background">◧</button>
+                            <button class="tool-btn mode-grid-btn" id="modeGrid" type="button" title="Grid: colour in cells on a grid (triangles, squares, hexagons, octagons)">▦ Grid</button>
                             <span class="pick-actions" id="pickActions" hidden>
                                 <span class="pick-count" id="pickCount"></span>
                                 <button class="tool-btn pick-btn" id="pickCopy" type="button" title="Make a copy (Ctrl+D)">⧉ Copy</button>
@@ -282,6 +282,7 @@
                             <button class="tool-btn" id="gridUndo" title="Undo">↶</button>
                             <button class="tool-btn" id="gridClear" title="Clear grid">✕</button>
                             <button class="tool-btn" id="gridBg" title="Background">◧</button>
+                            <button class="tool-btn mode-grid-btn active" id="gridBack" type="button" title="Back to Draw">▦ Grid</button>
                             <span class="pick-actions" id="gridPickActions" hidden>
                                 <span class="pick-count" id="gridPickCount"></span>
                                 <button class="tool-btn pick-btn" id="gridPickCopy" type="button" title="Make a copy, then drag it (Ctrl+D)">⧉ Copy</button>
@@ -299,7 +300,7 @@
                                 <div class="cb-layer" id="cbItems"></div>
                             </div>
                             <div class="cb-marquee" id="cbMarquee" hidden></div>
-                            <div class="cb-empty" id="cbEmpty">Double-click to add a sticky note · scroll to zoom · middle mouse button to move</div>
+                            <div class="cb-empty" id="cbEmpty">Double-click to add a sticky note · Ctrl + scroll to zoom · middle mouse button to move</div>
                         </div>
                         <div class="draw-container zoom-viewport" id="drawContainer" style="display:none;">
                             <canvas id="drawCanvas" width="800" height="600"></canvas>
@@ -309,7 +310,7 @@
                             <canvas id="gridCanvas" width="800" height="800"></canvas>
                             <button class="zoom-reset" type="button" hidden title="Reset zoom">1:1</button>
                         </div>
-                        <div class="zoom-hint" id="zoomHint" style="display:none;">Pinch with two fingers to zoom and move · Ctrl + scroll to zoom and middle mouse button to move on a computer</div>
+                        <div class="zoom-hint" id="zoomHint" style="display:none;">Pinch with two fingers to zoom and move · on a computer: Ctrl + scroll to zoom, Shift + scroll to move sideways, middle mouse button to move</div>
                     </div>
                 </section>
 
