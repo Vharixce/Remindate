@@ -2118,3 +2118,8 @@ body.touch-dragging, body.touch-dragging * { -webkit-user-select: none !importan
 .pj-assign button { background: none; border: 0; cursor: pointer; font-size: 12px; padding: 1px 4px; border-radius: 4px; filter: grayscale(.4); }
 .pj-assign button:hover { background: rgba(255, 255, 255, .08); filter: none; }
 @media (max-width: 900px) { .pj-main { flex-direction: column-reverse; } .pj-side { position: static; flex-basis: auto; width: 100%; flex-direction: row; } .pj-box { flex: 1; min-width: 0; } }
+.pj-assign button.pj-assign-dept { color: #f3f4f6; filter: none; display: inline-flex; align-items: center; }
+.pj-assign .pj-done { display: none; filter: none; color: #fff; background: var(--primary); font-size: 11px; font-weight: 600; padding: 2px 9px; margin-left: 2px; }
+.pj-assign .pj-done:hover { background: var(--primary); filter: brightness(1.15); }
+.pj-card.editing .pj-done { display: inline-block; }
+.pj-untitled { color: var(--text-dim); font-style: italic; }

@@ -6339,6 +6339,8 @@ RemminStore.ready.then(() => {
         !document.querySelector('.modal.active') && !isPrivateLocked(noteById(pj.noteId));
 
     function loadProject(note) {
+        if (pj.editing && pj.editFinish && pj.noteId) pj.editFinish(true);
+        pj.editing = null; pj.editFinish = null;
         pj.noteId = note ? note.id : null;
         const saved = note && note.project ? JSON.parse(JSON.stringify(note.project)) : {};
         pj.columns = Array.isArray(saved.columns) ? saved.columns : pjDefault();
@@ -6364,6 +6366,7 @@ RemminStore.ready.then(() => {
         pj.redo = [];
     }
     function pjUndoRedo(back) {
+        if (pj.editing && pj.editFinish) pj.editFinish(false);
         const from = back ? pj.undo : pj.redo, to = back ? pj.redo : pj.undo;
         if (!from.length) return;
         to.push(pjState());
@@ -6391,13 +6394,14 @@ RemminStore.ready.then(() => {
         return `
                     <div class="pj-card" data-card="${card.id}"${edge}>
                         <span class="pj-grip" title="Drag to move" aria-hidden="true">⠿</span>
-                        <div class="pj-card-text">${escapeHtml(card.text)}</div>
+                        <div class="pj-card-text">${card.text ? escapeHtml(card.text) : '<span class="pj-untitled">Untitled</span>'}</div>
                         <div class="pj-card-foot">
                             ${depts.map((d) => `<span class="pj-chip" style="background:${escapeHtml(d.color)};color:${textOn(d.color)}">${escapeHtml(d.name)}</span>`).join('')}
                             ${people.map((p) => `<span class="pj-avatar" title="${escapeHtml(p.name)}">${escapeHtml(initials(p.name))}</span>`).join('')}
                             <span class="pj-assign">
-                                <button type="button" class="pj-assign-dept" title="Department">🏷</button>
-                                <button type="button" class="pj-assign-person" title="Assign a person">👤</button>
+                                <button type="button" class="pj-assign-dept" title="Department" aria-label="Department"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M3 12V4a1 1 0 0 1 1-1h8l9 9-9 9-9-9z"/><circle cx="7.5" cy="7.5" r="1.6" fill="currentColor"/></svg></button>
+                                <button type="button" class="pj-assign-person" title="Assign a person" aria-label="Assign a person">👤</button>
+                                <button type="button" class="pj-done" title="Save this item (Enter)">Done</button>
                             </span>
                         </div>
                         <button type="button" class="pj-card-del" title="Delete item" aria-label="Delete item">✕</button>
@@ -6431,9 +6435,6 @@ RemminStore.ready.then(() => {
             $(kind === 'dept' ? 'pjDeptInput' : 'pjPersonInput').focus();
             return;
         }
-        // an item being typed in: keep what was typed so far
-        const typing = pjCols.querySelector(`[data-card="${cardId}"] .pj-card-input`);
-        if (typing && typing.value.trim()) f.card.text = typing.value.trim();
         const have = new Set(f.card[field] || []);
         showMenu(anchor, kind === 'dept' ? 'Department' : 'Assign', list.map((x) => ({
             label: `${have.has(x.id) ? '✓ ' : ''}${x.name}`,
@@ -6441,12 +6442,13 @@ RemminStore.ready.then(() => {
             run: () => {
                 const g = pjFindCard(cardId);
                 if (!g) return;
-                pjRecord();
+                const editing = pj.editing && pj.editing.kind === 'card' && pj.editing.id === cardId;
+                if (!editing) pjRecord();
                 const now = new Set(g.card[field] || []);
                 if (now.has(x.id)) now.delete(x.id); else now.add(x.id);
                 g.card[field] = [...now];
-                renderProject();
-                pjSave();
+                renderProject();           // an item being typed in stays open (and keeps its text)
+                if (!editing) pjSave();
             }
         })));
     }
@@ -6521,67 +6523,61 @@ RemminStore.ready.then(() => {
             </div>`).join('') +
             '<button type="button" class="pj-add-col" id="pjAddCol">+ Add column</button>';
         if (pj.editing) {
-            const { kind, id } = pj.editing;
-            pj.editing = null;
-            if (kind === 'card') pjEditCard(id); else pjEditColumn(id);
+            const ed = pj.editing;
+            if (ed.kind === 'card') pjEditCard(ed.id, ed); else { pj.editing = null; pjEditColumn(ed.id); }
         }
     }
 
-    // typing in a card (Enter = done, Shift+Enter = new line, Esc = cancel)
-    function pjEditCard(id) {
+    // typing in a card (Enter or Done = save, Shift+Enter = new line, Esc = cancel).
+    // Nothing is saved before Enter / Done: also not a department or person you give it meanwhile.
+    function pjEditCard(id, ed = null) {
+        if (!ed && pj.editing && pj.editing.kind === 'card' && pj.editing.id !== id && pj.editFinish) pj.editFinish(true);
         const found = pjFindCard(id);
         const el = pjCols.querySelector(`[data-card="${id}"]`);
         if (!found || !el) return;
-        pj.editing = { kind: 'card', id };
-        const orig = found.card.text;
+        if (!ed) {
+            ed = { kind: 'card', id, isNew: false, orig: JSON.stringify(found.card), before: pjState(), draft: null };
+        }
+        pj.editing = ed;
         const box = document.createElement('textarea');
         box.className = 'pj-card-input';
-        box.value = found.card.text;
+        box.value = ed.draft !== null ? ed.draft : found.card.text;
         box.rows = 2;
+        box.placeholder = 'What needs to be done?';
         el.querySelector('.pj-card-text').replaceWith(box);
         el.classList.add('editing');
         const grow = () => { box.style.height = 'auto'; box.style.height = `${box.scrollHeight}px`; };
         grow();
-        box.addEventListener('input', grow);
+        box.addEventListener('input', () => { ed.draft = box.value; grow(); });
         box.focus();
         box.setSelectionRange(box.value.length, box.value.length);
-        let done = false;
         const finish = (keep) => {
-            if (done) return;
-            done = true;
+            if (pj.editing !== ed) return;
             pj.editing = null;
+            pj.editFinish = null;
             const f = pjFindCard(id);
             if (f) {
-                const text = box.value.trim();
-                if (keep && (text !== orig || text !== f.card.text)) {
-                    if (orig !== '' || text !== '') pjRecord();
-                    if (text) f.card.text = text; else f.col.cards.splice(f.i, 1);
-                    pjSave();
-                } else if (!text && !orig) {
-                    f.col.cards.splice(f.i, 1); // a new item that stayed empty
+                if (keep) {
+                    f.card.text = (ed.draft !== null ? ed.draft : f.card.text).trim();
+                    const empty = !f.card.text && !(f.card.people || []).length && !(f.card.depts || []).length;
+                    if (empty) f.col.cards.splice(f.i, 1);
+                    const changed = ed.isNew ? !empty : JSON.stringify(empty ? null : f.card) !== ed.orig;
+                    if (changed) { pj.undo.push(ed.before); pj.redo = []; pjSave(); }
+                } else if (ed.isNew) {
+                    f.col.cards.splice(f.i, 1);          // a new item that was cancelled
+                } else {
+                    Object.assign(f.card, JSON.parse(ed.orig)); // back to how it was
+                    if (!JSON.parse(ed.orig).people) delete f.card.people;
+                    if (!JSON.parse(ed.orig).depts) delete f.card.depts;
                 }
             }
             renderProject();
         };
+        pj.editFinish = finish;
         box.addEventListener('keydown', (e) => {
             e.stopPropagation();
             if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(true); }
             else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
-        });
-        box.addEventListener('blur', () => {
-            // opening the Department / Assign menu of this item keeps it open for typing
-            setTimeout(() => {
-                const m = document.querySelector('.tree-menu:not([hidden]), #actionSheet.active');
-                if (m && pj.editing && pj.editing.id === id) {
-                    const back = () => { if (!done && document.body.contains(box)) box.focus(); else if (!done) finish(true); };
-                    const watch = setInterval(() => {
-                        if (done) { clearInterval(watch); return; }
-                        if (!document.querySelector('.tree-menu:not([hidden]), #actionSheet.active')) { clearInterval(watch); back(); }
-                    }, 120);
-                    return;
-                }
-                finish(true);
-            }, 0);
         });
     }
     function pjEditColumn(id) {
@@ -6616,9 +6612,11 @@ RemminStore.ready.then(() => {
     function pjAddCard(colId) {
         const col = pjCol(colId);
         if (!col) return;
+        if (pj.editing && pj.editFinish) pj.editFinish(true); // save the item you were typing in first
+        const before = pjState();
         const card = { id: uid(), text: '' };
         col.cards.push(card);
-        pj.editing = { kind: 'card', id: card.id };
+        pj.editing = { kind: 'card', id: card.id, isNew: true, orig: null, before, draft: null };
         renderProject();
         const el = pjCols.querySelector(`[data-card="${card.id}"]`);
         if (el) el.scrollIntoView({ block: 'nearest' });
@@ -6651,6 +6649,7 @@ RemminStore.ready.then(() => {
         if (t.closest('#pjUndo')) { pjUndoRedo(true); return; }
         if (t.closest('#pjRedo')) { pjUndoRedo(false); return; }
         if (t.closest('#pjAddCol')) {
+            if (pj.editing && pj.editFinish) pj.editFinish(true);
             pjRecord();
             const col = { id: uid(), name: 'New column', cards: [] };
             pj.columns.push(col);
@@ -6687,6 +6686,7 @@ RemminStore.ready.then(() => {
             toast('Item deleted (↶ to undo)');
             return;
         }
+        if (t.closest('.pj-done')) { if (pj.editFinish) pj.editFinish(true); return; }
         const assign = t.closest('.pj-assign-dept, .pj-assign-person');
         if (assign) {
             const id = assign.closest('.pj-card').dataset.card;
@@ -8934,7 +8934,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'Project: assign people and coloured departments to items; faster zoom';
+    const PATCH_NOTE = 'Project items save with Enter or Done; clearer department button';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {
