@@ -119,6 +119,7 @@
                         <div class="mode-toggle">
                             <button class="toggle-btn active" id="modeText">Text</button>
                             <button class="toggle-btn" id="modeCollage">Collage</button>
+                            <button class="toggle-btn" id="modeProject">Project</button>
                             <button class="toggle-btn" id="modeDraw">Draw</button>
                         </div>
                     </div>
@@ -293,6 +294,14 @@
 
                     <div class="editor-body">
                         <div id="noteContent" class="text-editor rich-editor" contenteditable="true" spellcheck="true" data-placeholder="Write your note here..."></div>
+                        <div class="project-board" id="projectBoard" style="display:none;">
+                            <div class="pj-bar">
+                                <button class="tool-btn" type="button" id="pjUndo" title="Undo (Ctrl+Z)" disabled>↶</button>
+                                <button class="tool-btn" type="button" id="pjRedo" title="Redo (Ctrl+Y)" disabled>↷</button>
+                                <span class="pj-tip">Click an item to edit it · drag items between columns (on a phone: drag the ⠿ grip) · double-click a column name to rename it</span>
+                            </div>
+                            <div class="pj-columns" id="pjColumns"></div>
+                        </div>
                         <div class="collage-board" id="collageBoard" style="display:none;">
                             <div class="cb-world" id="cbWorld">
                                 <div class="cb-layer" id="cbFrames"></div>

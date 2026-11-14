@@ -692,7 +692,8 @@ RemminStore.ready.then(() => {
             ? note.content.replace(/\s+/g, ' ').trim().slice(0, 60)
             : (hasImages(note) ? 'Image' : hasVoice(note) ? 'Voice note' : note.strokes.length ? 'Drawing'
                 : Object.values(note.grids || {}).some((g) => g && Object.keys(g).length) ? 'Grid'
-                : note.collage && note.collage.items && note.collage.items.length ? 'Collage' : 'Empty note');
+                : note.collage && note.collage.items && note.collage.items.length ? 'Collage'
+                : note.project && (note.project.columns || []).some((c) => c.cards && c.cards.length) ? 'Project' : 'Empty note');
         let meta = '';
         if (note.scheduledAt) {
             const next = isRecurring(note) ? nextOccurrence(note, Date.now()) : null;
@@ -1445,6 +1446,7 @@ RemminStore.ready.then(() => {
             $('noteFolder').innerHTML = folderOptions('');
             state.draw.strokes = [];
             loadCollage(null);
+            loadProject(null);
             updateScheduleUi(null);
             setMode('text');
             return;
@@ -1465,6 +1467,7 @@ RemminStore.ready.then(() => {
         drawSel = null;
         state.draw.strokes = note.strokes.map(copyStroke);
         loadCollage(note);
+        loadProject(note);
 
         setMode(state.prefs.mode);
         fitCanvas();
@@ -1541,6 +1544,7 @@ RemminStore.ready.then(() => {
         // keep nothing of the note in the editor while it is locked
         stopVoicePlayback();
         loadCollage(null);
+        loadProject(null);
         editorEl.innerHTML = '';
         $('noteTitle').value = '';
         state.draw.strokes = [];
@@ -6284,7 +6288,7 @@ RemminStore.ready.then(() => {
     });
 
     function setMode(mode) {
-        if (!['text', 'collage', 'draw', 'grid'].includes(mode)) mode = 'text';
+        if (!['text', 'collage', 'project', 'draw', 'grid'].includes(mode)) mode = 'text';
         if (mode !== 'collage' && typeof cbEndEdit === 'function') cbEndEdit(true);
         state.prefs.mode = mode;
         savePrefs();
@@ -6292,6 +6296,8 @@ RemminStore.ready.then(() => {
         $('modeCollage').classList.toggle('active', mode === 'collage');
         $('collageBoard').style.display = mode === 'collage' ? 'block' : 'none';
         $('collageToolbar').style.display = mode === 'collage' ? 'block' : 'none';
+        $('modeProject').classList.toggle('active', mode === 'project');
+        $('projectBoard').style.display = mode === 'project' ? 'block' : 'none';
         $('modeDraw').classList.toggle('active', mode === 'draw' || mode === 'grid'); // Grid lives inside Draw
         editorEl.style.display = mode === 'text' ? 'block' : 'none';
         $('textToolbar').style.display = mode === 'text' ? 'block' : 'none';
@@ -6299,7 +6305,7 @@ RemminStore.ready.then(() => {
         $('drawToolbar').style.display = mode === 'draw' ? 'block' : 'none';
         gridContainer.style.display = mode === 'grid' ? 'block' : 'none';
         $('gridToolbar').style.display = mode === 'grid' ? 'block' : 'none';
-        $('zoomHint').style.display = mode === 'text' ? 'none' : 'block';
+        $('zoomHint').style.display = mode === 'text' || mode === 'project' ? 'none' : 'block';
         $('zoomHint').textContent = mode === 'collage'
             ? 'Ctrl + scroll to zoom · Shift + scroll to move sideways · drag with the middle mouse button (or hold Space) to move · double-click to add a sticky note · pinch with two fingers on a phone'
             : 'Pinch with two fingers to zoom and move · on a computer: Ctrl + scroll to zoom, Shift + scroll to move sideways, middle mouse button to move';
@@ -6318,12 +6324,338 @@ RemminStore.ready.then(() => {
     $('modeDraw').addEventListener('click', () => setMode('draw'));
     $('modeGrid').addEventListener('click', () => setMode('grid'));
     $('gridBack').addEventListener('click', () => setMode('draw'));
+    $('modeProject').addEventListener('click', () => setMode('project'));
 
-    // Ctrl + scroll zooms in small steps: about 6% per notch of a mouse wheel
+    /* ---------------- Project mode: a board like GitHub Projects ----------------
+     * note.project = { columns: [{ id, name, cards: [{ id, text }] }] }
+     * New boards start with To do / In progress / Review / Done (only saved once you change something). */
+    const pjBoard = $('projectBoard');
+    const pjCols = $('pjColumns');
+    const pj = { columns: [], noteId: null, undo: [], redo: [], editing: null };
+    const PJ_DEFAULT = ['To do', 'In progress', 'Review', 'Done'];
+    const pjDefault = () => PJ_DEFAULT.map((name) => ({ id: uid(), name, cards: [] }));
+    const pjActive = () => state.prefs.mode === 'project' && state.prefs.activeTab !== 'calendar' && !!pj.noteId &&
+        !document.querySelector('.modal.active') && !isPrivateLocked(noteById(pj.noteId));
+
+    function loadProject(note) {
+        pj.noteId = note ? note.id : null;
+        pj.columns = note && note.project && Array.isArray(note.project.columns)
+            ? JSON.parse(JSON.stringify(note.project.columns)) : pjDefault();
+        pj.undo = []; pj.redo = []; pj.editing = null;
+        renderProject();
+    }
+    function pjSave() {
+        const note = noteById(pj.noteId);
+        if (!note || isPrivateLocked(note)) return;
+        note.project = { columns: JSON.parse(JSON.stringify(pj.columns)) };
+        touch(note);
+    }
+    function pjRecord() {
+        pj.undo.push(JSON.stringify(pj.columns));
+        if (pj.undo.length > 100) pj.undo.shift();
+        pj.redo = [];
+    }
+    function pjUndoRedo(back) {
+        const from = back ? pj.undo : pj.redo, to = back ? pj.redo : pj.undo;
+        if (!from.length) return;
+        to.push(JSON.stringify(pj.columns));
+        pj.columns = JSON.parse(from.pop());
+        pj.editing = null;
+        renderProject();
+        pjSave();
+    }
+    const pjCol = (id) => pj.columns.find((c) => c.id === id);
+    function pjFindCard(id) {
+        for (const col of pj.columns) {
+            const i = col.cards.findIndex((c) => c.id === id);
+            if (i >= 0) return { col, i, card: col.cards[i] };
+        }
+        return null;
+    }
+
+    function renderProject() {
+        $('pjUndo').disabled = !pj.undo.length;
+        $('pjRedo').disabled = !pj.redo.length;
+        pjCols.innerHTML = pj.columns.map((col) => `
+            <div class="pj-col" data-col="${col.id}">
+                <div class="pj-col-head">
+                    <span class="pj-col-name" title="Double-click to rename">${escapeHtml(col.name)}</span>
+                    <span class="pj-count">${col.cards.length}</span>
+                    <button type="button" class="pj-col-menu" title="Column options" aria-label="Column options">⋯</button>
+                </div>
+                <div class="pj-cards">${col.cards.map((card) => `
+                    <div class="pj-card" data-card="${card.id}">
+                        <span class="pj-grip" title="Drag to move" aria-hidden="true">⠿</span>
+                        <div class="pj-card-text">${escapeHtml(card.text)}</div>
+                        <button type="button" class="pj-card-del" title="Delete item" aria-label="Delete item">✕</button>
+                    </div>`).join('')}</div>
+                <button type="button" class="pj-add-card">+ Add item</button>
+            </div>`).join('') +
+            '<button type="button" class="pj-add-col" id="pjAddCol">+ Add column</button>';
+        if (pj.editing) {
+            const { kind, id } = pj.editing;
+            pj.editing = null;
+            if (kind === 'card') pjEditCard(id); else pjEditColumn(id);
+        }
+    }
+
+    // typing in a card (Enter = done, Shift+Enter = new line, Esc = cancel)
+    function pjEditCard(id) {
+        const found = pjFindCard(id);
+        const el = pjCols.querySelector(`[data-card="${id}"]`);
+        if (!found || !el) return;
+        pj.editing = { kind: 'card', id };
+        const box = document.createElement('textarea');
+        box.className = 'pj-card-input';
+        box.value = found.card.text;
+        box.rows = 2;
+        el.querySelector('.pj-card-text').replaceWith(box);
+        el.classList.add('editing');
+        const grow = () => { box.style.height = 'auto'; box.style.height = `${box.scrollHeight}px`; };
+        grow();
+        box.addEventListener('input', grow);
+        box.focus();
+        box.setSelectionRange(box.value.length, box.value.length);
+        let done = false;
+        const finish = (keep) => {
+            if (done) return;
+            done = true;
+            pj.editing = null;
+            const f = pjFindCard(id);
+            if (f) {
+                const text = box.value.trim();
+                if (keep && text !== f.card.text) {
+                    if (!(f.card.text === '' && text === '')) pjRecord();
+                    if (text) f.card.text = text; else f.col.cards.splice(f.i, 1);
+                    pjSave();
+                } else if (!f.card.text) {
+                    f.col.cards.splice(f.i, 1); // a new item that stayed empty
+                }
+            }
+            renderProject();
+        };
+        box.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); finish(true); }
+            else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+        });
+        box.addEventListener('blur', () => finish(true));
+    }
+    function pjEditColumn(id) {
+        const col = pjCol(id);
+        const el = pjCols.querySelector(`[data-col="${id}"] .pj-col-name`);
+        if (!col || !el) return;
+        pj.editing = { kind: 'col', id };
+        const input = document.createElement('input');
+        input.className = 'pj-col-input';
+        input.value = col.name;
+        input.maxLength = 60;
+        el.replaceWith(input);
+        input.focus();
+        input.select();
+        let done = false;
+        const finish = (keep) => {
+            if (done) return;
+            done = true;
+            pj.editing = null;
+            const name = input.value.trim();
+            const c = pjCol(id);
+            if (c && keep && name && name !== c.name) { pjRecord(); c.name = name; pjSave(); }
+            renderProject();
+        };
+        input.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+            else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+        });
+        input.addEventListener('blur', () => finish(true));
+    }
+    function pjAddCard(colId) {
+        const col = pjCol(colId);
+        if (!col) return;
+        const card = { id: uid(), text: '' };
+        col.cards.push(card);
+        pj.editing = { kind: 'card', id: card.id };
+        renderProject();
+        const el = pjCols.querySelector(`[data-card="${card.id}"]`);
+        if (el) el.scrollIntoView({ block: 'nearest' });
+    }
+    async function pjDeleteColumn(id) {
+        const col = pjCol(id);
+        if (!col) return;
+        if (col.cards.length) {
+            const ok = await askDialog({ title: `Delete column "${col.name}"?`, message: `Its ${col.cards.length} item(s) are deleted too. You can undo this with ↶.`, okLabel: 'Delete', danger: true });
+            if (!ok) return;
+        }
+        pjRecord();
+        pj.columns = pj.columns.filter((c) => c.id !== id);
+        renderProject();
+        pjSave();
+    }
+    function pjMoveColumn(id, dir) {
+        const i = pj.columns.findIndex((c) => c.id === id);
+        const j = i + dir;
+        if (i < 0 || j < 0 || j >= pj.columns.length) return;
+        pjRecord();
+        [pj.columns[i], pj.columns[j]] = [pj.columns[j], pj.columns[i]];
+        renderProject();
+        pjSave();
+    }
+
+    pjBoard.addEventListener('click', (e) => {
+        if (!pjActive() || pjDrag) return;
+        const t = e.target;
+        if (t.closest('#pjUndo')) { pjUndoRedo(true); return; }
+        if (t.closest('#pjRedo')) { pjUndoRedo(false); return; }
+        if (t.closest('#pjAddCol')) {
+            pjRecord();
+            const col = { id: uid(), name: 'New column', cards: [] };
+            pj.columns.push(col);
+            pj.editing = { kind: 'col', id: col.id };
+            renderProject();
+            pjSave();
+            pjCols.scrollLeft = pjCols.scrollWidth;
+            return;
+        }
+        const colEl = t.closest('.pj-col');
+        if (!colEl) return;
+        const colId = colEl.dataset.col;
+        if (t.closest('.pj-add-card')) { pjAddCard(colId); return; }
+        if (t.closest('.pj-col-menu')) {
+            const i = pj.columns.findIndex((c) => c.id === colId);
+            const actions = [
+                { label: 'Rename', icon: '✎', run: () => pjEditColumn(colId) },
+                { label: 'Add item', icon: '+', run: () => pjAddCard(colId) }
+            ];
+            if (i > 0) actions.push({ label: 'Move left', icon: '←', run: () => pjMoveColumn(colId, -1) });
+            if (i < pj.columns.length - 1) actions.push({ label: 'Move right', icon: '→', run: () => pjMoveColumn(colId, 1) });
+            actions.push({ label: 'Delete column', icon: '🗑', danger: true, run: () => pjDeleteColumn(colId) });
+            showMenu(t.closest('.pj-col-menu'), pjCol(colId).name, actions);
+            return;
+        }
+        const del = t.closest('.pj-card-del');
+        if (del) {
+            const f = pjFindCard(del.closest('.pj-card').dataset.card);
+            if (!f) return;
+            pjRecord();
+            f.col.cards.splice(f.i, 1);
+            renderProject();
+            pjSave();
+            toast('Item deleted (↶ to undo)');
+            return;
+        }
+        const card = t.closest('.pj-card');
+        if (card && !card.classList.contains('editing')) pjEditCard(card.dataset.card);
+    });
+    pjBoard.addEventListener('dblclick', (e) => {
+        const name = e.target.closest('.pj-col-name');
+        if (name && pjActive()) pjEditColumn(name.closest('.pj-col').dataset.col);
+    });
+
+    /* ---- dragging items between columns (mouse: drag the item · touch: drag its ⠿ grip) ---- */
+    let pjDrag = null;      // { id, ghost, holder, dx, dy } while dragging
+    let pjPress = null;     // a press that may become a drag
+    function pjStartDrag(p) {
+        const el = pjCols.querySelector(`[data-card="${p.id}"]`);
+        if (!el) return;
+        const r = el.getBoundingClientRect();
+        const ghost = el.cloneNode(true);
+        ghost.classList.add('pj-ghost');
+        ghost.style.width = `${r.width}px`;
+        document.body.appendChild(ghost);
+        const holder = document.createElement('div');
+        holder.className = 'pj-holder';
+        holder.style.height = `${r.height}px`;
+        el.replaceWith(holder);
+        pjDrag = { id: p.id, ghost, holder, dx: p.x - r.left, dy: p.y - r.top, pointerId: p.pointerId };
+        pjBoard.classList.add('dragging');
+        pjMoveDrag(p.x, p.y);
+    }
+    function pjMoveDrag(x, y) {
+        const d = pjDrag;
+        d.ghost.style.transform = `translate(${x - d.dx}px, ${y - d.dy}px) rotate(1.5deg)`;
+        const under = document.elementFromPoint(x, y);
+        const colEl = under && under.closest('.pj-col');
+        if (!colEl) return;
+        const list = colEl.querySelector('.pj-cards');
+        const cards = [...list.querySelectorAll('.pj-card')];
+        const before = cards.find((c) => { const r = c.getBoundingClientRect(); return y < r.top + r.height / 2; });
+        if (before) { if (before.previousSibling !== d.holder) list.insertBefore(d.holder, before); }
+        else if (list.lastChild !== d.holder) list.appendChild(d.holder);
+        // scroll the board sideways near its edges
+        const br = pjCols.getBoundingClientRect();
+        if (x < br.left + 40) pjCols.scrollLeft -= 12; else if (x > br.right - 40) pjCols.scrollLeft += 12;
+    }
+    function pjEndDrag(drop) {
+        const d = pjDrag;
+        pjDrag = null;
+        pjBoard.classList.remove('dragging');
+        d.ghost.remove();
+        if (drop) {
+            const list = d.holder.closest('.pj-cards');
+            const colId = list && list.closest('.pj-col').dataset.col;
+            const index = list ? [...list.children].filter((c) => c === d.holder || c.classList.contains('pj-card')).indexOf(d.holder) : -1;
+            const f = pjFindCard(d.id);
+            if (f && colId && index >= 0 && !(f.col.id === colId && f.i === index)) {
+                pjRecord();
+                const [card] = f.col.cards.splice(f.i, 1);
+                pjCol(colId).cards.splice(index, 0, card);
+                pjSave();
+            }
+        }
+        renderProject();
+    }
+    pjBoard.addEventListener('pointerdown', (e) => {
+        if (!pjActive() || e.button !== 0) return;
+        const card = e.target.closest('.pj-card');
+        if (!card || card.classList.contains('editing') || e.target.closest('.pj-card-del')) return;
+        const grip = e.target.closest('.pj-grip');
+        if (e.pointerType !== 'mouse' && !grip) return; // on a touch screen the card itself scrolls / opens
+        pjPress = { id: card.dataset.card, x: e.clientX, y: e.clientY, pointerId: e.pointerId };
+        if (grip) { e.preventDefault(); const pr = pjPress; pjPress = null; pjStartDrag(pr); }
+    });
+    document.addEventListener('pointermove', (e) => {
+        if (pjDrag) { if (e.pointerId === pjDrag.pointerId) { e.preventDefault(); pjMoveDrag(e.clientX, e.clientY); } return; }
+        if (!pjPress || e.pointerId !== pjPress.pointerId) return;
+        const far = Math.hypot(e.clientX - pjPress.x, e.clientY - pjPress.y) > 6;
+        if (!far) return;
+        const p = pjPress;
+        pjPress = null;
+        p.x = e.clientX; p.y = e.clientY;
+        pjStartDrag(p);
+    });
+    const pjUp = (e) => {
+        pjPress = null;
+        if (pjDrag && e.pointerId === pjDrag.pointerId) {
+            pjEndDrag(e.type === 'pointerup');
+            // don't treat the end of a drag as a click on the card
+            const stop = (ev) => { ev.stopPropagation(); ev.preventDefault(); };
+            window.addEventListener('click', stop, { capture: true, once: true });
+            setTimeout(() => window.removeEventListener('click', stop, { capture: true }), 50);
+        }
+    };
+    document.addEventListener('pointerup', pjUp);
+    document.addEventListener('pointercancel', pjUp);
+    // while dragging on a phone, the page must not scroll
+    document.addEventListener('touchmove', (e) => { if (pjDrag) e.preventDefault(); }, { passive: false });
+    pjBoard.addEventListener('contextmenu', (e) => { if (e.target.closest('.pj-card') && e.pointerType !== 'mouse') e.preventDefault(); });
+
+    document.addEventListener('keydown', (e) => {
+        if (!pjActive() || pj.editing) return;
+        const t = e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]');
+        if (t && t.offsetParent !== null) return;
+        const key = e.key.toLowerCase();
+        if ((e.ctrlKey || e.metaKey) && !e.altKey && key === 'z') { e.preventDefault(); pjUndoRedo(!e.shiftKey); }
+        else if ((e.ctrlKey || e.metaKey) && !e.altKey && key === 'y') { e.preventDefault(); pjUndoRedo(false); }
+        else if (e.key === 'Escape' && pjDrag) pjEndDrag(false);
+    });
+
+
+    // Ctrl + scroll zooms in small steps: about 9% per notch of a mouse wheel
     // (a touchpad pinch sends many small steps and follows your fingers)
     function wheelZoomFactor(e) {
         const d = e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY;
-        if (Math.abs(d) >= 40) return d < 0 ? 1.06 : 1 / 1.06;
+        if (Math.abs(d) >= 40) return d < 0 ? 1.09 : 1 / 1.09;
         return Math.exp(-d * 0.01);
     }
     // Shift + scroll: how far to move sideways (browsers report it as deltaX or deltaY)
@@ -8453,7 +8785,7 @@ RemminStore.ready.then(() => {
 
     /* ---------------- broadcast text in the top bar ---------------- */
     // a very short summary of the latest patch; "XXX" in the broadcast text is replaced with it
-    const PATCH_NOTE = 'scroll moves the page, Shift+scroll sideways, Ctrl+scroll zooms; Grid moved into Draw';
+    const PATCH_NOTE = 'new Project board (To do, In progress, Review, Done) and bigger zoom steps';
     const DEFAULT_BROADCAST = 'Broadcast: Remmin 1.1: XXX';
     const broadcastText = () => (typeof state.prefs.broadcast === 'string' ? state.prefs.broadcast : DEFAULT_BROADCAST);
     function renderBroadcast() {
