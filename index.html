@@ -283,7 +283,7 @@
                             <button class="tool-btn" id="gridUndo" title="Undo">↶</button>
                             <button class="tool-btn" id="gridClear" title="Clear grid">✕</button>
                             <button class="tool-btn" id="gridBg" title="Background">◧</button>
-                            <button class="tool-btn mode-grid-btn active" id="gridBack" type="button" title="Back to Draw">▦ Grid</button>
+                            <button class="tool-btn mode-grid-btn" id="gridBack" type="button" title="Back to Draw">✎ Draw</button>
                             <span class="pick-actions" id="gridPickActions" hidden>
                                 <span class="pick-count" id="gridPickCount"></span>
                                 <button class="tool-btn pick-btn" id="gridPickCopy" type="button" title="Make a copy, then drag it (Ctrl+D)">⧉ Copy</button>
@@ -298,9 +298,23 @@
                             <div class="pj-bar">
                                 <button class="tool-btn" type="button" id="pjUndo" title="Undo (Ctrl+Z)" disabled>↶</button>
                                 <button class="tool-btn" type="button" id="pjRedo" title="Redo (Ctrl+Y)" disabled>↷</button>
-                                <span class="pj-tip">Click an item to edit it · drag items between columns (on a phone: drag the ⠿ grip) · double-click a column name to rename it</span>
+                                <span class="pj-tip">Click an item to edit it · 🏷 / 👤 on an item: give it a department / person · drag items between columns (on a phone: drag the ⠿ grip) · double-click a column name to rename it</span>
                             </div>
-                            <div class="pj-columns" id="pjColumns"></div>
+                            <div class="pj-main">
+                                <div class="pj-columns" id="pjColumns"></div>
+                                <aside class="pj-side" id="pjSide">
+                                    <div class="pj-box">
+                                        <div class="pj-box-title">Departments</div>
+                                        <div class="pj-side-list" id="pjDeptList"></div>
+                                        <form class="pj-side-form" id="pjDeptForm"><input type="text" id="pjDeptInput" maxlength="50" placeholder="+ Add department" autocomplete="off"></form>
+                                    </div>
+                                    <div class="pj-box">
+                                        <div class="pj-box-title">People</div>
+                                        <div class="pj-side-list" id="pjPeopleList"></div>
+                                        <form class="pj-side-form" id="pjPersonForm"><input type="text" id="pjPersonInput" maxlength="50" placeholder="+ Add person" autocomplete="off"></form>
+                                    </div>
+                                </aside>
+                            </div>
                         </div>
                         <div class="collage-board" id="collageBoard" style="display:none;">
                             <div class="cb-world" id="cbWorld">
